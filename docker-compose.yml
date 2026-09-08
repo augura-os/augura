@@ -1,0 +1,133 @@
+# 项目名不固定：继承目录名（主目录 creative-os 效果相同），
+# 避免在第二个 checkout/彩排目录跑 compose 时接管同名生产容器（彩排教训）。
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-augura}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-augura}
+      POSTGRES_DB: ${POSTGRES_DB:-augura}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432" # 宿主机 5432 常被本机其它 Postgres 占用；容器间通信仍走内部 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-augura}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/augura123}
+    volumes:
+      - neo4jdata:/data
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-augura}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-augura123}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-augura} $${MINIO_ROOT_PASSWORD:-augura123};
+      mc mb --ignore-existing local/$${MINIO_BUCKET:-creative-assets};
+      mc admin user add local $${MINIO_APP_USER:-augura-app} $${MINIO_APP_PASSWORD:-augura-app123} || true;
+      i=0;
+      until mc admin policy attach local readwrite --user $${MINIO_APP_USER:-augura-app}; do
+        i=$$((i+1));
+        if [ $$i -ge 12 ]; then echo 'FATAL: minio policy attach failed after 12 tries' >&2; exit 1; fi;
+        echo \"policy attach retry $$i/12...\" >&2; sleep 5;
+      done"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-augura}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-augura123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-creative-assets}
+      MINIO_APP_USER: ${MINIO_APP_USER:-augura-app}
+      MINIO_APP_PASSWORD: ${MINIO_APP_PASSWORD:-augura-app123}
+
+  api:
+    image: ghcr.io/augura-os/augura-api:latest
+    # 公开发布：up 直接拉 ghcr 预构建镜像；本地改动后开发用 up --build 重建
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-augura}:${POSTGRES_PASSWORD:-augura}@postgres:5432/${POSTGRES_DB:-augura}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-augura123}
+      MINIO_ENDPOINT: minio:9000
+      # 业务程序用最小权限账号（init 创建）；root 只留给运维
+      MINIO_ACCESS_KEY: ${MINIO_APP_USER:-augura-app}
+      MINIO_SECRET_KEY: ${MINIO_APP_PASSWORD:-augura-app123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-creative-assets}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      VISION_MODEL: ${VISION_MODEL:-gpt-4o}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      # 遥测接收端（可选；不配则一切 no-op）
+      TELEMETRY_ENDPOINT: ${TELEMETRY_ENDPOINT:-}
+      TELEMETRY_TOKEN: ${TELEMETRY_TOKEN:-}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - ./uploads:/app/uploads
+      - ./docs:/app/docs:ro # 合并守卫裁决录（case-rulings.json），只读挂载，改裁决不用重建镜像
+      # 私有 IP 包注入（可选）：真版 ip_pack.py 放入 ip_pack/ 后取消下行注释
+      # - ./ip_pack/ip_pack.py:/app/apps/api/app/services/ip_pack.py:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  web:
+    image: ghcr.io/augura-os/augura-web:latest
+    # 公开发布：up 直接拉 ghcr 预构建镜像；本地改动后开发用 up --build 重建
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  neo4jdata:
+  miniodata:

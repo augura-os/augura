@@ -1,0 +1,6 @@
+pytest==8.3.4
+ruff==0.8.4
+# The API imports the in-repo graph package (app/services/graph_sync.py);
+# locally it is an editable install in .venv, in CI it must be installed
+# explicitly (path is relative to apps/api where pip runs).
+-e ../../packages/graph

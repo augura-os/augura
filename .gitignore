@@ -1,0 +1,16 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+.env
+uploads/*
+!uploads/.gitkeep
+.DS_Store
+# Local hybrid-mode tooling (downloaded ffmpeg build)
+tools/
+*.egg-info/
+# Database backups (scripts/backup_db.ps1 output)
+backups/
+# 真版 IP 包（私有注入，见 ip_pack/README.md 与 docs/open-source-release-checklist.md）
+ip_pack/ip_pack.py

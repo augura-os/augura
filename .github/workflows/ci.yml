@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: augura
+          POSTGRES_PASSWORD: augura
+          POSTGRES_DB: augura
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U augura"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements.txt
+            apps/api/requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Ruff
+        run: ruff check .
+      - name: Pytest (incl. migrations + repositories against service Postgres)
+        env:
+          TEST_ADMIN_URL: postgresql+psycopg2://augura:augura@localhost:5432/postgres
+          DATABASE_URL: postgresql+psycopg2://augura:augura@localhost:5432/augura
+        run: python -m pytest tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript
+        run: npx tsc -b
+      - name: Vitest
+        run: npm test
+      - name: Build
+        run: npm run build

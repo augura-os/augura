@@ -471,7 +471,7 @@ export default function SettingsPage() {
             <div className="space-y-1.5">
               <Label>分市场阈值覆盖（可选，按市场码）</Label>
               <p className="text-xs text-neutral-400">
-                市场 = 语言区（PT/ES/US…），文件名混合前缀（如 ABCPT）自动归一到码。
+                市场 = 语言区（PT/ES/US…），文件名混合前缀自动归一到码。
                 不同市场 CPP/ROAS 量级不同（如美国 CPM 是巴西的数倍）。未配置的市场
                 显示「跟随全局」，点击展开编辑。跨市场裂变判定会自动改用目标市场内相对口径。
               </p>

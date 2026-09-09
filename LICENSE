@@ -1,45 +1,37 @@
-creativeOS 依据 Apache License 2.0 的修改版本授权，并附加以下条件：
+Augura is licensed under a modified Apache License 2.0, with the following additional terms:
 
-## 一、附加条件
+## Additional Terms
 
-**1. 商业使用与 SaaS 限制**
+**1. Commercial use & SaaS restriction**
 
-本软件可被用于商业目的，包括作为其他应用的内部组件或企业内部的分析平台使用。但在满足下列情形时，必须从权利方获得商业许可：
+You may use this software commercially, including as an internal component of other applications or as an internal analytics platform. However, a commercial license from the rights holder is required when:
 
-**a. 托管或嵌入服务**：未经 CreativeOS 书面明确授权，您不得使用本软件源代码向第三方提供托管服务，亦不得将本软件作为组件嵌入任何向第三方出售、许可或以其他方式商业分发的产品或服务中。
+**a. Hosting or embedding as a service**: without explicit written authorization from Augura, you may not use this software's source code to provide a hosted service to third parties, nor embed it as a component in any product or service that is sold, licensed, or otherwise commercially distributed to third parties.
 
-- 本限制适用于：将本软件（整体或实质部分）作为 SaaS 平台、托管服务、或其他商业产品中的集成组件对外提供。
-- **单一组织内部使用（包括同一组织内的多个团队与工作区）无需商业许可。**
-- 商业授权事宜请联系：GitHub Issues（https://github.com/Monest01/CreativeOS/issues）
+- This restriction applies to offering the software (in whole or substantial part) as a SaaS platform, hosted service, or integrated component of another commercial product.
+- **Use within a single organization (including multiple teams and workspaces of that organization) does NOT require a commercial license.**
+- For commercial licensing, open an issue: https://github.com/augura-os/augura/issues
 
-**b. 标识与版权信息保留**：在使用本软件前端界面的过程中，您不得移除或修改控制台或应用中的 LOGO 与版权信息。本限制不适用于不涉及本软件前端的使用方式。
+**b. Logo & copyright retention**: when using this software's frontend interface, you may not remove or modify the logo or copyright notices in the console or application. This restriction does not apply to usage that does not involve the frontend.
 
-- 前端定义：为本许可之目的，本软件的"前端"指以源码运行时的 `apps/web/`（或等效前端目录）中的全部组件，或以分发形式运行时的对应前端程序包。
+- Frontend definition: for the purpose of this license, the "frontend" means all components in `apps/web/` (or the equivalent frontend directory) when running from source, or the corresponding frontend package in distributed form.
 
-**2. 贡献者条款**
+**2. Contributor terms**
 
-作为贡献者，您提交代码（包括但不限于 Pull Request、补丁、建议性修改）即表示您同意：
+By contributing code (including but not limited to pull requests, patches, and suggested changes), you agree that:
 
-a. 权利方可根据需要将本开源协议调整为更严格或更宽松的版本；
+a. The rights holder may adjust this open-source license to a stricter or more permissive version for future releases;
 
-b. 您所贡献的代码可被权利方用于商业目的，包括但不限于其云服务业务的运营。
+b. Your contributions may be used by the rights holder for commercial purposes, including the operation of its cloud services.
 
-## 二、其他条款
+## Other terms
 
-除上述特定条件外，其他一切权利与限制均遵循 Apache License 2.0。协议全文见本文件下半部分及：
+Except for the specific conditions above, all rights and restrictions follow the Apache License 2.0. The full text is below and at:
 http://www.apache.org/licenses/LICENSE-2.0
 
-© 2026 CreativeOS. All rights reserved.
+© 2026 Augura. All rights reserved.
 
 ---
-
-## 附：实践说明
-
-1. 本项目 License 类型为 **Modified Apache 2.0 (SaaS restriction applies)**，GitHub 会识别为 "Other" 许可证类型——这是修改版协议的正常表现（Multica、n8n 等项目同样如此）。
-2. 本软件的权利主体与署名主体为 **CreativeOS**（署名信息见仓库 `NOTICE`）；依据贡献者条款 2a，协议调整仅适用于之后发布的版本，已发布版本仍按原协议执行。
-
----
-
 
                                  Apache License
                            Version 2.0, January 2004

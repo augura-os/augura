@@ -15,11 +15,35 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 
-const KIMI_PRESET = {
-  base_url: "https://api.moonshot.cn/v1",
-  vision_model: "kimi-k2.5",
-  embedding_model: "",
-};
+/** 一键预设：填好 base_url + vision_model + embedding_model。
+ *  注意两类 Kimi key 不通用：开放平台 key 在 platform.moonshot.cn 创建；
+ *  编程套餐 key（sk-kimi- 开头）在 kimi.com 创建，只能走 coding 端点。 */
+const PROVIDER_PRESETS = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    base_url: "https://api.openai.com/v1",
+    vision_model: "gpt-4o",
+    embedding_model: "text-embedding-3-small",
+    note: "",
+  },
+  {
+    id: "kimi",
+    label: "Kimi 开放平台",
+    base_url: "https://api.moonshot.cn/v1",
+    vision_model: "kimi-k2.5",
+    embedding_model: "",
+    note: "",
+  },
+  {
+    id: "kimi-coding",
+    label: "Kimi 编程套餐",
+    base_url: "https://api.kimi.com/coding/v1",
+    vision_model: "kimi-for-coding",
+    embedding_model: "",
+    note: "sk-kimi- 开头的 kimi.com 套餐 key 专用，与开放平台 key 不通用",
+  },
+] as const;
 
 /** 视觉特征关键词：模型列表排序时优先展示，降低误选纯文本/embedding 模型的概率。 */
 const VISION_HINT = /vision|gpt-4o|gpt-4\.1|kimi|moonshot-v1|gemini|claude|qwen-vl|\bvl\b/i;
@@ -105,10 +129,10 @@ export default function SettingsPage() {
       .catch(() => {});
   }, [data?.api_key_set, data?.base_url]);
 
-  const applyKimiPreset = () => {
-    setBaseUrl(KIMI_PRESET.base_url);
-    setVisionModel(KIMI_PRESET.vision_model);
-    setEmbeddingModel(KIMI_PRESET.embedding_model);
+  const applyPreset = (preset: (typeof PROVIDER_PRESETS)[number]) => {
+    setBaseUrl(preset.base_url);
+    setVisionModel(preset.vision_model);
+    setEmbeddingModel(preset.embedding_model);
   };
 
   // 拉取模型列表：成功 → Vision model 输入框获得下拉提示（仍可手填）；
@@ -144,6 +168,17 @@ export default function SettingsPage() {
 
   const onSave = () => {
     const model = visionModel.trim();
+    const url = baseUrl.trim().replace(/\/+$/, "");
+    // Base URL 没有任何路径段（如 https://api.moonshot.cn）时分析必报 404 url.not_found
+    if (
+      url &&
+      /^https?:\/\/[^/]+$/.test(url) &&
+      !window.confirm(
+        "Base URL 看起来缺少 /v1 路径（例如 https://api.moonshot.cn/v1），分析时会报 404。仍要保存吗？",
+      )
+    ) {
+      return;
+    }
     // 已拿到端点模型列表时校验拼写：不在列表中需用户确认，防止打错后跑分析才报错
     if (
       modelOptions &&
@@ -302,13 +337,19 @@ export default function SettingsPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <Label htmlFor="base_url">Base URL</Label>
-                <button
-                  type="button"
-                  onClick={applyKimiPreset}
-                  className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-900 hover:underline"
-                >
-                  Use Kimi preset
-                </button>
+                <div className="flex items-center gap-2.5">
+                  {PROVIDER_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      title={preset.note || preset.base_url}
+                      onClick={() => applyPreset(preset)}
+                      className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-900 hover:underline"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <Input
                 id="base_url"
@@ -318,7 +359,8 @@ export default function SettingsPage() {
                 autoComplete="off"
               />
               <p className="text-xs text-neutral-400">
-                Kimi: https://api.moonshot.cn/v1 · OpenAI: https://api.openai.com/v1
+                点右上一键预设。Kimi 编程套餐 key（sk-kimi- 开头）与开放平台 key 不通用；
+                本地/自建端点（Ollama 等）直接填自己的地址。
               </p>
             </div>
 

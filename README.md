@@ -70,7 +70,15 @@ docker compose up --build -d  # dev/private: build locally (first run ~20 min)
 
 ### 1. Set your AI key
 
-Open **Settings** and paste a key from any OpenAI-compatible provider (OpenAI, Kimi…). Nothing is called until you upload something.
+Open **Settings** and paste a key from any OpenAI-compatible provider. The preset buttons fill in the matching Base URL and models for you:
+
+| Key source | Base URL | Vision model | Embedding |
+| --- | --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` | `text-embedding-3-small` |
+| Kimi 开放平台 (platform.moonshot.cn) | `https://api.moonshot.cn/v1` | `kimi-k2.5` | — (local text similarity fallback) |
+| Kimi 编程套餐 (kimi.com, `sk-kimi-…` keys) | `https://api.kimi.com/coding/v1` | `kimi-for-coding` | — (同上) |
+
+The two kinds of Kimi keys are **not interchangeable** — a `sk-kimi-` coding-plan key returns 401 on `api.moonshot.cn`, and vice versa. A Base URL missing its `/v1` path fails analysis with a 404; Settings warns before saving such a URL. Self-hosted / local endpoints (Ollama-compatible, etc.) work too — just fill in your own Base URL, and your frames never leave the machine. Nothing is called until you upload something.
 
 ### 2. Upload a batch
 

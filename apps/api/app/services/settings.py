@@ -114,7 +114,11 @@ def list_provider_models(config: AIConfig) -> ModelListResult:
     except APIStatusError as exc:
         if exc.status_code == 404:
             return ModelListResult(
-                False, [], "该端点不支持模型列表（/models 404），请手填模型名"
+                False,
+                [],
+                "端点返回 404——请检查 Base URL 是否完整"
+                "（例如 Kimi 是 https://api.moonshot.cn/v1，注意 /v1）；"
+                "若确认 URL 无误，则该端点不支持模型列表，请手填模型名",
             )
         return ModelListResult(False, [], f"端点返回错误（HTTP {exc.status_code}）")
     models = sorted({model.id for model in page.data})

@@ -106,6 +106,8 @@ class TestListProviderModels:
         result = list_provider_models(_CONFIG)
         assert result.ok is False
         assert "不支持模型列表" in result.message
+        # 404 最常见的原因是 Base URL 漏了 /v1，提示里必须带这个排查方向
+        assert "/v1" in result.message
 
     def test_missing_api_key(self) -> None:
         result = list_provider_models(

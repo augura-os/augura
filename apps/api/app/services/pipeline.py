@@ -368,11 +368,17 @@ def run_analysis_pipeline(asset_id: str) -> None:
         run_post_analysis(db, config, creative.id, settings=settings)
     except Exception as exc:  # noqa: BLE001 — status must become "failed"
         logger.exception("分析流水线失败 asset=%s", asset_id)
+        # 404 url.not_found 几乎都是 Base URL 漏了 /v1，给用户可直接行动的提示
+        hint = (
+            "（请检查 Settings → Base URL 是否完整，例如 https://api.moonshot.cn/v1）"
+            if "url.not_found" in str(exc) or "Error code: 404" in str(exc)
+            else ""
+        )
         try:
             db.rollback()
             failed_asset = AssetRepository(db).get(asset_id)
             if failed_asset is not None:
-                _fail(db, failed_asset, f"分析失败：{exc}")
+                _fail(db, failed_asset, f"分析失败：{exc}{hint}")
         except Exception:  # noqa: BLE001
             logger.exception("记录失败状态时出错 asset=%s", asset_id)
     finally:

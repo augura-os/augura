@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models import CreativeDNA
+from app.services import ip_pack
 from app.services.dna_classifier import _rule_suggest, suggest_dna
 from app.services.llm_judge import vote_json
 from app.services.merge_judge import judge_pair
 from app.services.settings import AIConfig
+
+# 规则层关键词表（钩子原型/机制）属行业方法论，只在私有库 ip_pack 真版中；
+# OSS 占位版为空表，依赖关键词命中的用例在公开仓库跳过
+requires_ip_pack = pytest.mark.skipif(
+    not ip_pack.HOOK_PROTOTYPE_KEYWORDS,
+    reason="OSS 占位 ip_pack 无规则关键词表",
+)
 
 
 class _FakeConfig(AIConfig):
@@ -28,12 +37,14 @@ def _dna(db: Session, code: str, name: str, hook: str, mech: str) -> CreativeDNA
 
 
 class TestRuleLayer:
+    @requires_ip_pack
     def test_fail_retry_maps_to_d01(self, db_session: Session) -> None:
         dna = _dna(db_session, "D01", "失败重开×岛屿生存", "H11 失败重开", "采集+建造")
         suggestion = _rule_suggest("角色反复死亡失败重开", "沙漠挖掘建造", db_session)
         assert suggestion is not None and suggestion.dna.id == dna.id
         assert suggestion.votes == 2  # 规则层建议级
 
+    @requires_ip_pack
     def test_no_ads_maps_to_d02(self, db_session: Session) -> None:
         dna = _dna(db_session, "D02", "无广告宣言×岛屿采集", "H08 无广告宣言", "采集+建造")
         suggestion = _rule_suggest("这游戏没广告", "采集建造", db_session)
@@ -43,6 +54,7 @@ class TestRuleLayer:
         _dna(db_session, "D01", "失败重开×岛屿生存", "H11 失败重开", "采集+建造")
         assert _rule_suggest("量子物理讲座", "抽象思维", db_session) is None
 
+    @requires_ip_pack
     def test_suggest_dna_without_api_key_falls_back_to_rule(
         self, db_session: Session
     ) -> None:

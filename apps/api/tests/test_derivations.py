@@ -4,11 +4,18 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models import Creative, CreativeAsset, CreativeVariant, Performance
 from app.repositories.derivations import DerivationRepository
-from scripts.backfill_derivations import VariantInfo, infer_factor
+
+# 回填脚本只在私有库，未随公开仓库发布；缺失时跳过本文件而不是让整个 CI 红掉
+_backfill_derivations = pytest.importorskip(
+    "scripts.backfill_derivations", reason="scripts 未随公开仓库发布"
+)
+VariantInfo = _backfill_derivations.VariantInfo
+infer_factor = _backfill_derivations.infer_factor
 
 
 def _vi(filename: str, factors: set[str] | None = None) -> VariantInfo:

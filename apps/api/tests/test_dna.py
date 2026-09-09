@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models import Creative
 from app.repositories.dna import DnaRepository
-from scripts.backfill_dnas import DNAS
+
+# 回填脚本只在私有库，未随公开仓库发布；缺失时跳过本文件而不是让整个 CI 红掉
+DNAS = pytest.importorskip(
+    "scripts.backfill_dnas", reason="scripts 未随公开仓库发布"
+).DNAS
 
 
 def _make_dna(db: Session, code: str = "D99") -> object:

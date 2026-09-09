@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import EditLog
 from app.repositories.settings import SettingsRepository
-from scripts.migrate_market_codes import migrate_market_codes
+
+# 迁移脚本只在私有库，未随公开仓库发布；缺失时跳过本文件而不是让整个 CI 红掉
+migrate_market_codes = pytest.importorskip(
+    "scripts.migrate_market_codes", reason="scripts 未随公开仓库发布"
+).migrate_market_codes
 
 
 def _seed(db: Session) -> None:

@@ -1,7 +1,12 @@
 """Unit tests for scripts.backfill_variant_factors.derive_factors."""
 from __future__ import annotations
 
-from scripts.backfill_variant_factors import derive_factors
+import pytest
+
+# 回填脚本只在私有库，未随公开仓库发布；缺失时跳过本文件而不是让整个 CI 红掉
+derive_factors = pytest.importorskip(
+    "scripts.backfill_variant_factors", reason="scripts 未随公开仓库发布"
+).derive_factors
 
 
 def test_market_always_with_market_prefix() -> None:

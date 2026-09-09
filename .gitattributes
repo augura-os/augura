@@ -1,3 +1,7 @@
 # Shell 脚本必须 LF——CRLF 会让 macOS/Linux 报 "bad interpreter"
 *.sh text eol=lf
 *.command text eol=lf
+
+# Dockerfile 里的 \ 续行遇 CRLF 会断（Windows 本地 docker build 必挂）
+*.Dockerfile text eol=lf
+infra/docker/*.conf text eol=lf

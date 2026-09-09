@@ -6,6 +6,18 @@ on:
     branches: [main]
 
 jobs:
+  install-script-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash 3.2 compat (macOS system bash)
+        run: |
+          bash -n scripts/install.sh
+          # macOS 自带 bash 3.2 会把变量名后的多字节字符（全角括号等）吞进
+          # 变量名，set -u 下直接 unbound variable 崩溃。bash -n 抓不住
+          # （运行期展开错误），所以禁止 "$VAR 后紧跟非 ASCII 字符"的写法。
+          ! grep -P '\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]' scripts/install.sh
+
   backend:
     runs-on: ubuntu-latest
     defaults:

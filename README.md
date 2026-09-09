@@ -66,6 +66,8 @@ docker compose up --build -d  # dev/private: build locally (first run ~20 min)
 
 > **Deployment boundary**: Augura is a **single-user local tool** — no auth, no multi-tenancy, all ports bind to 127.0.0.1 by default. **Do not expose it directly to the public internet**; team/server deployments need your own reverse proxy + auth layer.
 
+> **Slow network?** The installer auto-falls-back: `raw.githubusercontent.com` → jsDelivr, and when `ghcr.io` is unreachable it pulls images via a mirror (`AUGURA_IMAGE_MIRROR`, default `ghcr.nju.edu.cn`). If Docker Hub is slow for the base images (postgres/neo4j/minio), configure `registry-mirrors` in Docker Desktop settings. For the Docker Desktop installer itself (~600 MB), a multi-connection downloader such as `aria2c` helps a lot.
+
 ## Getting Going
 
 ### 1. Set your AI key

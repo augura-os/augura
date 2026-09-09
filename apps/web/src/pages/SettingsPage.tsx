@@ -21,6 +21,12 @@ const KIMI_PRESET = {
   embedding_model: "",
 };
 
+/** 视觉特征关键词：模型列表排序时优先展示，降低误选纯文本/embedding 模型的概率。 */
+const VISION_HINT = /vision|gpt-4o|gpt-4\.1|kimi|moonshot-v1|gemini|claude|qwen-vl|\bvl\b/i;
+
+const sortVisionFirst = (models: string[]): string[] =>
+  [...models].sort((a, b) => Number(VISION_HINT.test(b)) - Number(VISION_HINT.test(a)));
+
 /** 市场前缀 → 规范市场码（与后端 markets.prefix_to_market_code 同规则：
  *  最长后缀命中码表 → 取码，EN 归一为 US；未命中 → 整段原样）。 */
 const marketCodeOf = (prefix: string, codes: string[]): string => {
@@ -91,6 +97,14 @@ export default function SettingsPage() {
     }
   }, [data]);
 
+  // 已配置 key+base_url 时自动拉一次模型列表（静默失败：端点不支持 /models 时保持手填）
+  useEffect(() => {
+    if (!data?.api_key_set || !data.base_url) return;
+    fetchAiModels()
+      .then((list) => setModelOptions(sortVisionFirst(list)))
+      .catch(() => {});
+  }, [data?.api_key_set, data?.base_url]);
+
   const applyKimiPreset = () => {
     setBaseUrl(KIMI_PRESET.base_url);
     setVisionModel(KIMI_PRESET.vision_model);
@@ -98,15 +112,18 @@ export default function SettingsPage() {
   };
 
   // 拉取模型列表：成功 → Vision model 输入框获得下拉提示（仍可手填）；
-  // 失败 → 显示人话原因（端点不支持 /models 时提示手填）
-  const onFetchModels = () => {
+  // 失败 → 显示人话原因（端点不支持 /models 时提示手填）。
+  // silent=true 用于自动拉取：失败静默降级，不打扰用户。
+  const onFetchModels = (silent = false) => {
     setModelsLoading(true);
-    setModelsError("");
+    if (!silent) setModelsError("");
     fetchAiModels()
-      .then((list) => setModelOptions(list))
-      .catch((err) =>
-        setModelsError(err instanceof Error ? err.message : "获取模型列表失败"),
-      )
+      .then((list) => setModelOptions(sortVisionFirst(list)))
+      .catch((err) => {
+        if (!silent) {
+          setModelsError(err instanceof Error ? err.message : "获取模型列表失败");
+        }
+      })
       .finally(() => setModelsLoading(false));
   };
 
@@ -126,11 +143,23 @@ export default function SettingsPage() {
   };
 
   const onSave = () => {
+    const model = visionModel.trim();
+    // 已拿到端点模型列表时校验拼写：不在列表中需用户确认，防止打错后跑分析才报错
+    if (
+      modelOptions &&
+      model &&
+      !modelOptions.includes(model) &&
+      !window.confirm(
+        `模型 "${model}" 不在该端点返回的模型列表中，可能是拼写错误。仍要保存吗？`,
+      )
+    ) {
+      return;
+    }
     updateMutation.mutate(
       {
         ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
         base_url: baseUrl.trim(),
-        vision_model: visionModel.trim(),
+        vision_model: model,
         embedding_model: embeddingModel.trim(),
       },
       {
@@ -138,6 +167,8 @@ export default function SettingsPage() {
           setApiKey("");
           setFeedback("Saved ✓");
           setTimeout(() => setFeedback(""), 3000);
+          // 保存成功后自动刷新模型列表（key/URL 可能刚改），失败静默降级
+          if (baseUrl.trim()) onFetchModels(true);
         },
         onError: (mutationError) => {
           setFeedback(mutationError instanceof Error ? mutationError.message : "Save failed");
@@ -297,11 +328,11 @@ export default function SettingsPage() {
                 {data?.api_key_set && baseUrl.trim() ? (
                   <button
                     type="button"
-                    onClick={onFetchModels}
+                    onClick={() => onFetchModels()}
                     disabled={modelsLoading}
                     className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-900 hover:underline disabled:opacity-40"
                   >
-                    {modelsLoading ? "获取中…" : "获取模型列表"}
+                    {modelsLoading ? "获取中…" : "刷新模型列表"}
                   </button>
                 ) : null}
               </div>
@@ -324,7 +355,7 @@ export default function SettingsPage() {
                 <p className="text-xs text-red-600">{modelsError}</p>
               ) : modelOptions ? (
                 <p className="text-xs text-neutral-400">
-                  已加载 {modelOptions.length} 个可用模型，可直接选择或手填
+                  已加载 {modelOptions.length} 个可用模型（视觉模型排在前面），可直接选择或手填
                 </p>
               ) : (
                 <p className="text-xs text-neutral-400">

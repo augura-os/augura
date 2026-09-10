@@ -148,19 +148,34 @@ info "正在启动服务（首次拉取镜像约 2-3 分钟，视网络而定）
 GHCR_IMAGES="augura-os/augura-api:latest augura-os/augura-web:latest"
 IMAGE_MIRROR="${AUGURA_IMAGE_MIRROR:-ghcr.nju.edu.cn}"
 used_mirror=""
-if ! curl -s -o /dev/null --max-time 5 https://ghcr.io/v2/ 2>/dev/null; then
-    warn "ghcr.io 直连不通，改用镜像站 ${IMAGE_MIRROR}（可用 AUGURA_IMAGE_MIRROR 覆盖）"
+
+pull_via_mirror() {
+    info "尝试通过镜像站 ${IMAGE_MIRROR} 拉取 ghcr 镜像..."
     for img in $GHCR_IMAGES; do
         docker pull "${IMAGE_MIRROR}/${img}" \
             && docker tag "${IMAGE_MIRROR}/${img}" "ghcr.io/${img}" \
-            || fatal "镜像站拉取失败：${IMAGE_MIRROR}/${img}——可换 AUGURA_IMAGE_MIRROR 重试，或 clone 仓库后 docker compose up --build -d 本地构建"
+            || return 1
     done
     used_mirror=1
     ok "镜像已通过镜像站就绪"
+    return 0
+}
+
+if ! curl -s -o /dev/null --max-time 5 https://ghcr.io/v2/ 2>/dev/null; then
+    warn "ghcr.io 直连不通，改用镜像站 ${IMAGE_MIRROR}（可用 AUGURA_IMAGE_MIRROR 覆盖）"
+    pull_via_mirror \
+        || fatal "镜像站拉取失败——可换 AUGURA_IMAGE_MIRROR 重试，或 clone 仓库后 docker compose up --build -d 本地构建"
 fi
 
 if [ -z "$used_mirror" ] && ! docker compose pull; then
-    fatal "镜像拉取失败——若仓库尚未公开发布镜像，请 clone 仓库后用 docker compose up --build -d 本地构建"
+    # ghcr 探测能通但 pull 仍失败（常见于国内半通状态）：同样回退镜像站，
+    # 之后 compose pull 只需拉 postgres/neo4j/minio 等 Docker Hub 基础镜像。
+    warn "compose pull 失败，回退镜像站 ${IMAGE_MIRROR} 重试 ghcr 镜像..."
+    if pull_via_mirror; then
+        docker compose pull || fatal "基础镜像拉取失败（postgres/neo4j/minio 来自 Docker Hub）——可配置 Docker 镜像加速器后重试，或 clone 仓库后 docker compose up --build -d 本地构建"
+    else
+        fatal "镜像拉取失败——若仓库尚未公开发布镜像，请 clone 仓库后用 docker compose up --build -d 本地构建"
+    fi
 fi
 docker compose up -d || fatal "服务启动失败。查看日志：docker compose logs api"
 

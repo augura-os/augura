@@ -734,7 +734,7 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>自动判定</CardTitle>
             <CardDescription>
-              分析完成后自动跑 DNA 归族与合并预裁。开启自动合并后，仅当 LLM 3/3 判同一创意
+              分析完成后自动跑 DNA 归族与合并预裁。自动合并默认开启：仅当 LLM 3/3 判同一创意
               且双视频 pHash 帧对齐率 ≥ 90%（且无既定拆分裁决）时才直接执行合并，
               其余一律只进收件箱建议——自动执行会在操作日志标注 auto: 前缀。
             </CardDescription>
@@ -744,11 +744,11 @@ export default function SettingsPage() {
               <input
                 type="checkbox"
                 className="h-4 w-4 accent-neutral-900"
-                checked={data?.merge_auto_enabled ?? false}
+                checked={data?.merge_auto_enabled ?? true}
                 disabled={updateMutation.isPending}
                 onChange={(event) => onToggleMergeAuto(event.target.checked)}
               />
-              允许自动合并候选 Creative（默认关闭）
+              允许自动合并候选 Creative（默认开启）
             </label>
           </CardContent>
         </Card>

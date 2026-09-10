@@ -13,9 +13,9 @@ class SettingsInfo(BaseModel):
     embedding_model: str
     telemetry_enabled: bool
     telemetry_instance_id: str
-    # 合并自动执行开关（默认关；开启后 LLM 3/3 + pHash 对齐 ≥0.90 的合并
+    # 合并自动执行开关（默认开；开启后 LLM 3/3 + pHash 对齐 ≥0.90 的合并
     # 候选对不再只写建议，由 judge_pipeline 直接执行并标 auto:）
-    merge_auto_enabled: bool = False
+    merge_auto_enabled: bool = True
     # 指标配置（v0.11）：显示 profile / 参与判定的指标 / 阈值
     metric_profile: list[str] = []
     judge_metrics: list[str] = []

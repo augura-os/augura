@@ -6,9 +6,9 @@
 - 归族：dna_id IS NULL 的 creative 走 dna_classifier（规则→LLM N=3），
   3/3 一致自动归族（edit_logs 标 auto:），2/3 写建议缓存
 - 合并：review.merge_candidate_items 的候选对走 merge_judge（3 票防偏），
-  默认只写建议缓存供收件箱一键确认；LLM 3/3 判同一 + pHash 帧对齐率
-  ≥ 0.90（视频物证）+ 无既定裁决 + merge_auto_enabled 开启 → 自动执行
-  合并（edit_logs 标 auto:），任一条件不满足维持只写建议
+  不满足自动门禁的一律只写建议缓存供收件箱一键确认；LLM 3/3 判同一 +
+  pHash 帧对齐率 ≥ 0.90（视频物证）+ 无既定裁决 + merge_auto_enabled
+  开启（默认开）→ 自动执行合并（edit_logs 标 auto:）
 - 失败静默，不阻塞；judge_auto_enabled=false 时只写缓存不自动执行
 
 两个 run_* 都接受 ``creative_id`` 做范围限定（上传管线只复核新素材
@@ -110,7 +110,7 @@ def run_merge_judgements(
         auto_enabled
         and not dry_run
         and settings is not None
-        and SettingsRepository(db).get("merge_auto_enabled") == "true"  # 默认关
+        and (SettingsRepository(db).get("merge_auto_enabled") or "true") != "false"  # 默认开
     )
     candidates = review_service.merge_candidate_items(db)
     for item in candidates:

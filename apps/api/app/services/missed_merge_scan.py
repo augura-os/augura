@@ -312,7 +312,7 @@ def scan_missed_merges(
     auto_merge = (
         not dry_run
         and (SettingsRepository(db).get("judge_auto_enabled") or "true") != "false"
-        and SettingsRepository(db).get("merge_auto_enabled") == "true"  # 默认关
+        and (SettingsRepository(db).get("merge_auto_enabled") or "true") != "false"  # 默认开
     )
 
     analysis_texts = _analysis_texts(db)

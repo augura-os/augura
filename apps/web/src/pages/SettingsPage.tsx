@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { fetchAiModels, testAiConnection } from "../services/api";
@@ -69,6 +69,9 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [visionModel, setVisionModel] = useState("");
+  // datalist 会按输入内容做子串过滤：输入框已有完整模型名时，聚焦先临时
+  // 清空让全量列表显示；未做选择直接失焦则恢复原值。
+  const visionStash = useRef<string | null>(null);
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [feedback, setFeedback] = useState<string>("");
   // 模型自动发现 + 连接测试（/settings/ai/*）
@@ -383,6 +386,18 @@ export default function SettingsPage() {
                 placeholder="gpt-4o"
                 value={visionModel}
                 onChange={(event) => setVisionModel(event.target.value)}
+                onFocus={() => {
+                  if (modelOptions?.includes(visionModel.trim())) {
+                    visionStash.current = visionModel;
+                    setVisionModel("");
+                  }
+                }}
+                onBlur={() => {
+                  if (visionStash.current !== null && visionModel.trim() === "") {
+                    setVisionModel(visionStash.current);
+                  }
+                  visionStash.current = null;
+                }}
                 autoComplete="off"
                 list={modelOptions ? "ai-model-options" : undefined}
               />

@@ -13,6 +13,8 @@ $RepoRaw   = if ($env:AUGURA_REPO_RAW)   { $env:AUGURA_REPO_RAW }   else { 'http
 $ComposeUrl = if ($env:AUGURA_COMPOSE_URL) { $env:AUGURA_COMPOSE_URL } else { "$RepoRaw/docker-compose.yml" }
 $EnvUrl     = if ($env:AUGURA_ENV_URL)     { $env:AUGURA_ENV_URL }     else { "$RepoRaw/.env.example" }
 $HomeDir    = if ($env:AUGURA_HOME)      { $env:AUGURA_HOME }      else { Join-Path $env:USERPROFILE 'augura' }
+$ImageMirror = if ($env:AUGURA_IMAGE_MIRROR) { $env:AUGURA_IMAGE_MIRROR } else { 'ghcr.nju.edu.cn' }
+$GhcrImages = @('augura-os/augura-api:latest', 'augura-os/augura-web:latest')
 
 $DockerBin = 'C:\Program Files\Docker\Docker\resources\bin'
 
@@ -138,12 +140,22 @@ New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
 Set-Location $HomeDir
 
 Info "下载部署文件到 $HomeDir ..."
-if ((Invoke-Native { curl.exe -fsSL $ComposeUrl -o docker-compose.yml }) -ne 0) {
-    Fatal "docker-compose.yml 下载失败（$ComposeUrl）"
+# 主源失败时回退 jsdelivr（raw.githubusercontent.com 国内经常不通）。
+# 仅对默认 GitHub raw 源生效，自定义 AUGURA_COMPOSE_URL/AUGURA_ENV_URL 的自己负责可达性。
+function Get-RemoteFile([string]$Url, [string]$Dest) {
+    if ((Invoke-Native { curl.exe -fsSL $Url -o $Dest }) -eq 0) { return }
+    if ($Url -like 'https://raw.githubusercontent.com/augura-os/augura/*') {
+        $path = $Url -replace '^https://raw\.githubusercontent\.com/augura-os/augura/', ''
+        $branch = $path.Split('/')[0]
+        $rest = $path.Substring($branch.Length + 1)
+        $mirror = "https://cdn.jsdelivr.net/gh/augura-os/augura@$branch/$rest"
+        Warn "主源下载失败，回退 jsdelivr 镜像：$mirror"
+        if ((Invoke-Native { curl.exe -fsSL $mirror -o $Dest }) -eq 0) { return }
+    }
+    Fatal "$Dest 下载失败（$Url）"
 }
-if ((Invoke-Native { curl.exe -fsSL $EnvUrl -o .env.example }) -ne 0) {
-    Fatal ".env.example 下载失败（$EnvUrl）"
-}
+Get-RemoteFile $ComposeUrl 'docker-compose.yml'
+Get-RemoteFile $EnvUrl '.env.example'
 Ok '部署文件就绪'
 
 # --- 5. 环境文件（首启生成随机密码） ---------------------------------------------
@@ -168,9 +180,25 @@ if (-not (Test-Path .env)) {
     Ok '.env 已存在'
 }
 
-# --- 6. 拉取镜像（自动重试；多次失败可配国内加速器） --------------------------------
+# --- 6. 拉取镜像（自动重试；多次失败回退 ghcr 镜像站 / 国内加速器） -------------------
 function Invoke-ComposePull {
     return ((Invoke-Native { docker compose pull }) -eq 0)
+}
+
+function Install-ImagesViaMirror {
+    Info "尝试通过镜像站 $ImageMirror 拉取 ghcr 镜像..."
+    foreach ($img in $GhcrImages) {
+        if ((Invoke-Native { docker pull "$ImageMirror/$img" }) -ne 0) {
+            Warn "镜像站拉取失败：$ImageMirror/$img"
+            return $false
+        }
+        if ((Invoke-Native { docker tag "$ImageMirror/$img" "ghcr.io/$img" }) -ne 0) {
+            Warn "镜像打标失败：$img"
+            return $false
+        }
+    }
+    # ghcr 镜像已由镜像站补齐，compose pull 只需拉 postgres/neo4j/minio 等基础镜像
+    return (Invoke-ComposePull)
 }
 
 Info '正在拉取镜像（首次约 2-3 分钟，视网络而定）...'
@@ -179,6 +207,7 @@ for ($i = 1; $i -le 3; $i++) {
     if (Invoke-ComposePull) { $pulled = $true; break }
     Warn "镜像拉取失败（第 $i/3 次，网络中断会自动续传），重试..."
 }
+if (-not $pulled -and (Install-ImagesViaMirror)) { $pulled = $true }
 if (-not $pulled) {
     Warn '多次拉取失败。国内网络拉取 Docker Hub 镜像通常需要配置镜像加速器。'
     $answer = Read-Host '是否自动配置国内镜像加速器（写入 ~/.docker/daemon.json 并重启 Docker）？(Y/n)'

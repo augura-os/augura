@@ -311,7 +311,7 @@ export interface SettingsResponse {
   embedding_model: string;
   telemetry_enabled: boolean;
   telemetry_instance_id: string;
-  /** 合并自动执行开关（默认关；LLM 3/3 + pHash 对齐 ≥0.90 才自动合并） */
+  /** 合并自动执行开关（默认开；LLM 3/3 + pHash 对齐 ≥0.90 才自动合并） */
   merge_auto_enabled: boolean;
   /** 显示指标（顺序即展示顺序）；见 services/settings.DISPLAY_METRICS */
   metric_profile: string[];

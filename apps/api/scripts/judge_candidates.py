@@ -7,7 +7,7 @@
   3/3 一致自动归族（edit_logs 标 auto:），2/3 写建议缓存
 - 合并：review.merge_candidate_items 的候选对走 merge_judge（3 票防偏）+
   pHash 帧对齐测量物证，全部一致"同一"且对齐率 ≥ 0.90 且无既定裁决、
-  merge_auto_enabled 开启 → 自动合并；其余写建议缓存供收件箱一键确认
+  merge_auto_enabled 开启（默认开）→ 自动合并；其余写建议缓存供收件箱一键确认
 - 失败静默，不阻塞；judge_auto_enabled=false 时只写缓存不自动执行
 
 Usage:

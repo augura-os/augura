@@ -100,7 +100,7 @@ def get_settings_info(db: DbDep, settings: SettingsDep) -> Envelope[SettingsInfo
             embedding_model=config.embedding_model,
             telemetry_enabled=enabled_raw != "false",  # 默认开启（PRIVACY.md §1.1）
             telemetry_instance_id=_resolve_instance_id(repo, db.commit),
-            merge_auto_enabled=repo.get(MERGE_AUTO_ENABLED_SETTING) == "true",  # 默认关
+            merge_auto_enabled=repo.get(MERGE_AUTO_ENABLED_SETTING) != "false",  # 默认开
             metric_profile=metric_config.profile,
             judge_metrics=metric_config.judge_metrics,
             metric_thresholds=metric_config.thresholds,

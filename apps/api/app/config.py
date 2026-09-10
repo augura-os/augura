@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     vision_model: str = "gpt-4o"
     embedding_model: str = "text-embedding-3-small"
     upload_dir: str = "/app/uploads"
+    # 同时运行的分析流水线数上限：每个 pipeline 在整个 LLM 调用期间持有
+    # 一个 DB session，不封顶会把连接池打爆（批量上传 = 每文件一个后台任务）
+    analysis_concurrency: int = 3
 
 
 @lru_cache

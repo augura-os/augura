@@ -264,13 +264,13 @@ class TestAutoMergeExecute:
         assert db_session.get(Creative, second.id) is not None
         assert len(self._merge_pair_suggestions(db_session)) == 1
 
-    def test_switch_default_off(self, db_session: Session, monkeypatch) -> None:
-        # merge_auto_enabled 未设置 = 默认关
+    def test_switch_default_on(self, db_session: Session, monkeypatch) -> None:
+        # merge_auto_enabled 未设置 = 默认开：证据齐全即自动合并
         first, second = self._harness(db_session, monkeypatch, merge_auto=None)
         self._run(db_session)
-        assert db_session.get(Creative, first.id) is not None
-        assert db_session.get(Creative, second.id) is not None
-        assert len(self._merge_pair_suggestions(db_session)) == 1
+        survivors = [c for c in (first, second) if db_session.get(Creative, c.id)]
+        assert len(survivors) == 1
+        assert self._merge_pair_suggestions(db_session) == []
 
     def test_prior_ruling_skips_pair(self, db_session: Session, monkeypatch) -> None:
         first, second = self._harness(db_session, monkeypatch)

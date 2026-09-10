@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -277,7 +278,18 @@ def _cluster(
     return creative, previous_creative_id
 
 
+# 分析并发上限：批量上传 = 每文件一个后台任务，每个 pipeline 在整个 LLM
+# 调用期间持有一个 DB session，不封顶会把连接池打爆（QueuePool timeout）。
+_PIPELINE_SLOTS = threading.Semaphore(get_settings().analysis_concurrency)
+
+
 def run_analysis_pipeline(asset_id: str) -> None:
+    """并发闸门：超出 analysis_concurrency 的任务在此排队（线程阻塞）。"""
+    with _PIPELINE_SLOTS:
+        _run_analysis_pipeline(asset_id)
+
+
+def _run_analysis_pipeline(asset_id: str) -> None:
     settings = get_settings()
     storage = StorageService(settings)
     db = SessionLocal()

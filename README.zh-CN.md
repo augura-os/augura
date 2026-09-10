@@ -66,6 +66,8 @@ docker compose up --build -d  # 开发/私有部署：本地构建（首次约 2
 
 > **部署边界**：Augura 是**单用户本地工具**——没有登录认证/多租户，所有端口默认只绑本机（127.0.0.1）。**不要直接部署到公网服务器**；团队/服务器部署需自行加反向代理 + 认证层。
 
+> **国内网络提示**：安装脚本已内置回退——`raw.githubusercontent.com` 失败自动切 jsDelivr；`ghcr.io` 不通时自动经镜像站拉取（`AUGURA_IMAGE_MIRROR`，默认 `ghcr.nju.edu.cn`）。Docker Hub 基础镜像（postgres/neo4j/minio）慢的话，在 Docker Desktop 设置里配 `registry-mirrors`。Docker Desktop 安装包本身约 600MB，建议用 `aria2c` 等多线程工具预下载（装好后脚本会自动跳过该步）。
+
 ## 快速上手
 
 ### 1. 配置 AI Key

@@ -152,6 +152,10 @@ def _coerce_list_fields(parsed: object) -> object:
     JSON Mode (Kimi/Moonshot) does not enforce array shapes the way strict
     json_schema does; models sometimes answer "a, b, c" instead of a real
     array. Split on comma-ish separators so validation stays strict.
+
+    Models also occasionally interleave numbers into string arrays
+    (score/coordinate hallucinations like ["张三", -3.5, "李四", 0.75]) —
+    drop non-string items instead of failing the whole analysis.
     """
     if not isinstance(parsed, dict):
         return parsed
@@ -164,4 +168,6 @@ def _coerce_list_fields(parsed: object) -> object:
                 for item in value.replace("，", ",").replace("、", ",").split(",")
             ]
             result[field] = [item for item in items if item]
+        elif isinstance(value, list):
+            result[field] = [item for item in value if isinstance(item, str)]
     return result

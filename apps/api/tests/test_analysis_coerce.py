@@ -35,3 +35,17 @@ def test_all_list_fields_covered() -> None:
     assert isinstance(result, dict)
     for value in result.values():
         assert value == ["x", "y"]
+
+
+def test_non_string_items_dropped() -> None:
+    # 模型把分值/坐标幻觉混进字符串数组（线上实证：15 validation errors）
+    parsed = {
+        "characters": ["张三", -3.5, "李四", 0.75],
+        "tags": ["真人", 0.6, "剧情", None],
+    }
+    result = _coerce_list_fields(parsed)
+    assert result == {"characters": ["张三", "李四"], "tags": ["真人", "剧情"]}
+
+
+def test_all_non_string_list_becomes_empty() -> None:
+    assert _coerce_list_fields({"emotion": [1, 2.5, None]}) == {"emotion": []}

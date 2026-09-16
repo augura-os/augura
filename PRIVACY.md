@@ -1,83 +1,85 @@
-# Augura 隐私政策
+# Augura Privacy Policy
 
-**更新日期：2026-07-23**
-**生效日期：2026-07-23**
+**English** | [简体中文](PRIVACY.zh-CN.md)
 
-Augura（以下简称"本工具"或"我们"）由 Augura 项目作者开发并运营。我们深知数据安全与用户信任的重要性，本隐私政策旨在说明我们在提供服务过程中如何收集、使用、存储和保护相关数据。请您在使用本工具前仔细阅读本政策。**您使用或继续使用本工具，即表示您已阅读、理解并同意本政策的全部内容。**
+**Last updated: 2026-07-23**
+**Effective: 2026-07-23**
 
-## 一、我们收集的数据及用途
+Augura ("the tool", "we") is developed and operated by the author(s) of the Augura project. We take data security and user trust seriously. This policy explains how we collect, use, store and protect data in the course of providing the tool. Please read it carefully before use. **By using or continuing to use the tool, you acknowledge that you have read, understood and agreed to this policy in full.**
 
-### 1.1a 运行保障数据（运行所必需，始终开启）
+## 1. Data We Collect and Why
 
-为保障软件的兼容性与稳定性，本工具会收集：程序报错信息与崩溃摘要、软件版本号、操作系统类型（时间均做 6 小时粗粒度分桶）。**不含任何素材、投放数据或可识别身份的信息。** 此为运行所必需，不设开关。
+### 1.1a Operational data (required, always on)
 
-### 1.1b 创意基因共建计划（默认开启，可关闭）
+To keep the software compatible and stable, the tool collects: error reports and crash digests, the software version, and the OS family (timestamps are coarsened into 6-hour buckets). **None of this includes creatives, delivery data, or anything that identifies you.** This is required for operation and has no toggle.
 
-为共建更准的创意判定能力与品类基准，加入计划后我们会收集：
+### 1.1b The Creative Genome Program (on by default, opt-out any time)
 
-- 功能模块的点击（功能名，不含操作对象内容）
-- 匿名化的实例标识符（随机生成，不包含您的姓名、账号、设备号等任何个人身份信息，90 天自动旋转）
-- 您的修正行为（AI 判定 → 人工修正的字段与方向；**素材命名类标识一律按实例加盐哈希脱敏——任意语言，凡 ≥3 段连字符结构的命名串均不可逆替换**；修正记录附品类/创意家族/市场三个上下文字段，用于家族级误判率分析，不含任何身份或素材内容）
-- 经匿名化、聚合化处理的统计指标（**市场 × 品类 × 创意家族**三维的指标区间分布、素材生命周期分布——只有桶和计数；素材市场由文件名前缀与 AI 分析标签交叉判定，判定存疑的素材不计入基准）
+To jointly improve creative-judgement accuracy and category benchmarks, participants in the program share:
 
-上述数据用于：产品功能迭代、行业研究与模型训练。**所有用于研究与训练的数据均经过匿名化与聚合化处理，无法识别到特定个人或企业。**
+- Feature clicks (feature names only, never the content you act on)
+- An anonymized instance identifier (randomly generated; contains no name, account, device ID, or any personally identifying information; rotates automatically every 90 days)
+- Your corrections (when you overrule an AI judgement: the field and the direction of change; **creative-name-style identifiers are always irreversibly hashed with a per-instance salt — in any language, any naming string of 3+ hyphen-separated segments is replaced**; corrections carry three context fields — genre / creative family / market — used for family-level misjudgement analysis, with no identity or creative content)
+- Anonymized, aggregated statistics (metric-range distributions across the **market × genre × creative family** dimensions, and creative-lifecycle distributions — buckets and counts only; a creative's market is cross-determined from filename prefixes and AI analysis tags, and creatives with uncertain determinations are excluded from benchmarks)
 
-您可以在本工具的"设置"页面随时关闭创意基因共建计划。关闭后，我们不会继续收集上述信息，但不影响您在关闭前已生成的匿名聚合数据的使用。
+The above is used for: product iteration, industry research, and model training. **All data used for research and training is anonymized and aggregated, and cannot be traced back to any specific person or company.**
 
-### 1.2 您主动提交的内容
+You can turn off the Creative Genome Program at any time on the tool's Settings page. After you opt out we stop collecting the above, but anonymized aggregate data already produced before opt-out remains usable.
 
-当您使用本工具的反馈、纠错、标注修正等功能并主动提交内容时，**视为您授权我们将该等内容用于产品改进、功能优化与模型训练**。请您不要在此类提交中包含您不希望向我们提供的任何信息。
+### 1.2 Content you submit voluntarily
 
-### 1.3 云端服务数据（仅适用于使用云端功能的用户）
+When you actively submit content through the tool's feedback, correction, or annotation features, **you grant us the right to use that content for product improvement, feature optimization, and model training**. Please do not include anything you do not wish to share with us in such submissions.
 
-如您注册并使用我们提供的云端服务（包括但不限于云端同步、团队空间、在线分析等），您上传至云端的数据将按照云端服务协议进行存储与处理。我们可能将云端服务中经匿名化、聚合化处理的数据用于产品改进、行业基准研究与模型训练。
+### 1.3 Cloud service data (only for cloud users)
 
-### 1.4 我们不收集的数据
+If you register for and use our cloud services (including but not limited to cloud sync, team spaces, online analysis), the data you upload is stored and processed under the cloud service agreement. We may use anonymized, aggregated data from cloud services for product improvement, industry benchmark research, and model training.
 
-我们承诺，本工具**不会**收集以下数据：
+### 1.4 Data we do NOT collect
 
-- 您的素材文件本体（视频、图片、音频等创意素材文件）
-- 您的广告投放账户明细数据（消耗、出价、ROAS 等可识别到具体投放行为的原始明细）
-- 您的姓名、手机号、身份证号等个人身份信息（云端服务注册所需的最基本信息除外）
-- 您的文件目录结构、本地文件名称
+We promise the tool does **not** collect:
 
-### 1.5 关于 AI 分析的数据流向（重要说明）
+- Your creative files themselves (videos, images, audio, or other creative assets)
+- Raw delivery details from your ad accounts (spend, bids, ROAS, or other line-level data that identifies specific delivery behavior)
+- Your name, phone number, government ID, or other personally identifying information (except the minimal information required to register for cloud services)
+- Your directory structure or local file names
 
-本工具的素材分析调用**您在设置页自行配置的模型服务**（OpenAI 兼容接口，如 OpenAI / Kimi 等）。进行分析时，素材的抽帧画面、结构化分析结果会发送至您配置的提供方——**这属于您与模型服务之间的直接调用，不属于本工具的"收集"行为**，其数据处理适用该提供方的隐私政策。您可以通过自建/本地模型服务（如 Ollama 兼容端点）让数据完全不出本机。
+### 1.5 Where data goes during AI analysis (important)
 
-## 二、数据的存储与保护
+Creative analysis calls **the model provider you configure yourself in Settings** (any OpenAI-compatible endpoint, e.g. OpenAI / Kimi). During analysis, sampled frames and structured analysis results are sent to the provider you configured — **this is a direct call between you and that model provider, not a "collection" by this tool**, and the handling of that data is governed by that provider's privacy policy. You can keep data entirely on your own machine by using a self-hosted / local model service (e.g. an Ollama-compatible endpoint).
 
-2.1 使用行为数据将在加密后传输并存储于位于中华人民共和国境内的服务器。
+## 2. Storage and Protection
 
-2.2 我们采用行业通行的技术与组织措施保护数据安全，包括传输加密、访问权限控制、数据分级存储。
+2.1 Usage data is transmitted encrypted and stored on servers located in the People's Republic of China.
 
-2.3 匿名化聚合数据将长期保存用于产品与模型迭代；可关联到匿名实例的原始遥测数据保留期限不超过 24 个月，到期后删除或彻底匿名化。
+2.2 We protect data with industry-standard technical and organizational measures, including encryption in transit, access control, and tiered storage.
 
-## 三、数据的共享与披露
+2.3 Anonymized aggregate data is retained long-term for product and model iteration; raw telemetry linkable to an anonymous instance is retained for no more than 24 months, after which it is deleted or thoroughly anonymized.
 
-3.1 我们不会向任何第三方出售、出租您的数据。
+## 3. Sharing and Disclosure
 
-3.2 我们可能以匿名化、聚合化的形式发布行业研究报告、基准数据（例如"某类创意模式在某市场的平均表现区间"）。此类数据经过 k-匿名聚合处理（单一统计桶内包含不少于 3 个独立来源，低于此数的桶不上传），无法反推出任何特定用户或企业。
+3.1 We do not sell or rent your data to any third party.
 
-3.3 仅在法律法规要求、司法机关或行政机关依法要求时，我们才可能依法披露相关信息。
+3.2 We may publish industry research or benchmark data in anonymized, aggregated form (e.g. "the average performance range of a creative pattern in a given market"). Such data is k-anonymity aggregated (a statistical bucket is uploaded only when it contains at least 3 independent sources) and cannot be used to reverse-engineer any specific user or company.
 
-## 四、您的权利
+3.3 We disclose information only when required by law, or by lawful request from judicial or administrative authorities.
 
-4.1 您有权随时关闭使用数据收集（设置页开关）。
+## 4. Your Rights
 
-4.2 您有权要求我们删除与您匿名实例标识符相关联的遥测数据。由于数据经过匿名化处理，我们可能无法定位特定实例的数据；如您希望删除，可通过下方联系方式与我们联系并提供您的实例标识符（可在设置页查看）。
+4.1 You may turn off usage-data collection at any time (toggle on the Settings page).
 
-4.3 云端服务用户有权按照云端服务协议导出、删除其账户数据。
+4.2 You may ask us to delete telemetry associated with your anonymous instance identifier. Because the data is anonymized, we may not be able to locate a specific instance's data; if you wish to delete it, contact us via the channel below and provide your instance identifier (visible on the Settings page).
 
-## 五、政策的更新
+4.3 Cloud service users may export or delete their account data under the cloud service agreement.
 
-我们可能不时更新本政策。更新后我们将在本工具内或官方渠道公示，重大变更将以显著方式提示。您继续使用本工具即视为接受更新后的政策。
+## 5. Changes to This Policy
 
-## 六、联系我们
+We may update this policy from time to time. Updates will be announced within the tool or via official channels, and material changes will be highlighted prominently. Continued use of the tool constitutes acceptance of the updated policy.
 
-如对本政策有任何疑问、意见或投诉，可通过以下方式联系我们：
-GitHub Issues（https://github.com/augura-os/augura/issues）
+## 6. Contact Us
+
+For questions, comments, or complaints about this policy, contact us via:
+GitHub Issues (https://github.com/augura-os/augura/issues)
 
 ---
 
-> 免责说明：本文件为产品实践文本，不构成法律意见。正式发布前建议由熟悉 PIPL 的律师做一次审阅。
+> Disclaimer: This document is a description of product practice and does not constitute legal advice.

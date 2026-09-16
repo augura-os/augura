@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "creative-graph"
+version = "0.1.0"
+description = "Neo4j graph repository for Augura"
+requires-python = ">=3.11"
+dependencies = [
+    "neo4j>=5.27,<6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+graph = ["py.typed"]

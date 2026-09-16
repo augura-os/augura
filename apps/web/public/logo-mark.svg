@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Augura logo 小尺寸变体：去信号点、加粗线条（favicon/侧栏用） -->
+  <g fill="none" stroke="currentColor" stroke-width="14" stroke-linecap="round">
+    <path d="M 20 100 Q 96 40 160 94" />
+    <path d="M 20 100 Q 96 160 160 106" />
+    <circle cx="90" cy="100" r="32" />
+  </g>
+  <circle cx="90" cy="100" r="12" fill="currentColor"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Augura logo：眼睛（看懂创意）+ 前方信号点（预兆） -->
+  <g fill="none" stroke="#171717" stroke-width="10" stroke-linecap="round">
+    <path d="M 20 100 Q 96 36 158 92" />
+    <path d="M 20 100 Q 96 164 158 108" />
+    <circle cx="88" cy="100" r="30" />
+  </g>
+  <circle cx="88" cy="100" r="10" fill="#171717"/>
+  <circle cx="172" cy="80" r="9" fill="#171717"/>
+</svg>

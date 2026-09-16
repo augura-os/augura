@@ -1,0 +1,7 @@
+# 构建上下文净化：本地 node_modules 是平台相关的（Windows shim 会让
+# Linux 容器里的 npm run build 报 node.exe: not found），必须排除
+.git
+**/node_modules
+**/dist
+**/__pycache__
+.env

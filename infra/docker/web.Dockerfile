@@ -1,5 +1,7 @@
 FROM node:20-alpine AS build
 
+LABEL org.opencontainers.image.source="https://github.com/augura-os/augura"
+
 WORKDIR /repo
 
 COPY packages/shared /repo/packages/shared

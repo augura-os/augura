@@ -330,6 +330,8 @@ export const zh: Record<string, string> = {
   "upload.fbNoteB": " 为准（中文看板可解析入库，但不作为今日建议的判定依据）。",
   "upload.viewUploaded": "在 Assets 查看已上传的 {n} 个文件 →",
   "upload.clearList": "清空列表",
+  "upload.tooLarge": "文件超过 {n} 大小上限",
+  "upload.maxSizeNote": "单个文件大小上限 {n}。",
 
   // --- 设置页 ---
   "settings.title": "设置",

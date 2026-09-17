@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     vision_model: str = "gpt-4o"
     embedding_model: str = "text-embedding-3-small"
     upload_dir: str = "/app/uploads"
+    # 单文件上传大小上限（字节），默认 1 GB；超限返回 413（UPLOAD_MAX_BYTES 可调）
+    upload_max_bytes: int = 1024 * 1024 * 1024
     # 同时运行的分析流水线数上限：每个 pipeline 在整个 LLM 调用期间持有
     # 一个 DB session，不封顶会把连接池打爆（批量上传 = 每文件一个后台任务）
     analysis_concurrency: int = 3

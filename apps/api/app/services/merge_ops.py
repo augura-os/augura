@@ -99,7 +99,7 @@ def merge_creatives(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Neo4j merge 同步失败: %s", exc)
-    rebuild_mirror(db)
+    rebuild_mirror(db, commit=commit)
 
     # 传递闭包：合并后 target 的特征变了（变体并入），原本相似度不够的
     # 漏网对可能因此浮出——对 target 局部重扫（O(N)，失败静默）。
@@ -107,7 +107,7 @@ def merge_creatives(
     try:
         from app.services.missed_merge_scan import scan_for_creative
 
-        scan_for_creative(db, settings, target.id)
+        scan_for_creative(db, settings, target.id, commit=commit)
     except Exception as exc:  # noqa: BLE001
         logger.warning("合并后局部重扫失败 target=%s: %s", target.id, exc)
     return hits

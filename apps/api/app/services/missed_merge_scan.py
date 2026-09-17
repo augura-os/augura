@@ -445,16 +445,20 @@ def scan_missed_merges(
     return stats
 
 
-def scan_for_creative(db: Session, settings: Settings, creative_id: str) -> None:
+def scan_for_creative(
+    db: Session, settings: Settings, creative_id: str, *, commit: bool = True
+) -> None:
     """局部重扫入口（合并后传递闭包 / 上传管线）：只扫该 creative vs 全部。
 
-    自行 resolve AI 配置 + 提交（调用方不感知事务细节）；失败静默。
+    自行 resolve AI 配置；失败静默。commit=False 时把提交留给调用方
+    （merge_creatives(commit=False) 跑在调用方的事务边界里）。
     """
     config = resolve_ai_config(db, settings)
     stats = scan_missed_merges(
         db, settings, config, creative_id=creative_id, emit=lambda _msg: None
     )
-    db.commit()
+    if commit:
+        db.commit()
     logger.info(
         "局部重扫 creative=%s: 召回 %d，合并 %d，建议 %d",
         creative_id, stats.recalled, stats.merged, stats.suggested,

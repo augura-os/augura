@@ -32,8 +32,12 @@ from app.models import (
 _MIRROR_LOCK_KEY = 721_603
 
 
-def rebuild_mirror(db: Session) -> None:
-    """Rewrite the whole mirror from relational state and commit."""
+def rebuild_mirror(db: Session, *, commit: bool = True) -> None:
+    """Rewrite the whole mirror from relational state.
+
+    commit=False 时把提交留给调用方（merge_creatives(commit=False) 跑在
+    judge_pipeline 的 begin_nested 事务边界里，不能中途 commit）。
+    """
     db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIRROR_LOCK_KEY})
     dnas_by_id = {d.id: d for d in db.scalars(select(CreativeDNA)).all()}
     creatives = list(db.scalars(select(Creative)).all())
@@ -159,7 +163,8 @@ def rebuild_mirror(db: Session) -> None:
 
     db.add_all(nodes)
     db.add_all(edges)
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def load_mirror(db: Session) -> tuple[list[GraphNode], list[GraphEdge]]:

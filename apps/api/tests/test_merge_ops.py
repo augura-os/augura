@@ -139,3 +139,48 @@ class TestAutoMerge:
             merge_ops.merge_creatives(
                 db_session, Settings(), source.id, source.id, auto=False,
             )
+
+
+class TestCommitContract:
+    """P1-5：merge_creatives(commit=False) 的"不提交"承诺必须贯穿全链路——
+    包括内部的 rebuild_mirror 与局部重扫（此前两者无条件 commit，
+    会把 judge_pipeline begin_nested 容错里的中间态落库）。"""
+
+    @staticmethod
+    def _spy_commits(monkeypatch) -> list[int]:  # noqa: ANN001
+        calls: list[int] = []
+        real_commit = Session.commit
+
+        def _spy(self) -> None:  # noqa: ANN001
+            calls.append(1)
+            real_commit(self)
+
+        monkeypatch.setattr(Session, "commit", _spy)
+        return calls
+
+    def test_commit_false_never_commits(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        source, target = _pair(db_session)
+        calls = self._spy_commits(monkeypatch)
+        merge_ops.merge_creatives(
+            db_session, Settings(), source.id, target.id, auto=False,
+            commit=False,
+        )
+        assert calls == []
+        # 写入在会话内已生效（提交留给调用方）
+        assert db_session.get(Creative, source.id) is None
+        assert db_session.scalars(
+            select(EditLog).where(EditLog.action == "merge")
+        ).one()
+
+    def test_commit_true_commits(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        source, target = _pair(db_session)
+        calls = self._spy_commits(monkeypatch)
+        merge_ops.merge_creatives(
+            db_session, Settings(), source.id, target.id, auto=False,
+        )
+        # merge 本体 + rebuild_mirror 各提交一次（局部重扫无 AI key 空跑）
+        assert len(calls) >= 2

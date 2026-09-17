@@ -310,7 +310,7 @@ class TestMergeTriggersRescan:
         calls: list[str] = []
         monkeypatch.setattr(
             missed_merge_scan, "scan_for_creative",
-            lambda db, settings, creative_id: calls.append(creative_id),
+            lambda db, settings, creative_id, **_kwargs: calls.append(creative_id),
         )
         merge_ops.merge_creatives(
             db_session, Settings(), source.id, target.id, auto=False,

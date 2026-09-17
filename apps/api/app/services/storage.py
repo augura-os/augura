@@ -21,7 +21,7 @@ class StorageService:
             settings.minio_endpoint,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
-            secure=False,  # compose injects "minio:9000" (plain http)
+            secure=settings.minio_secure,  # compose 默认 plain http（minio:9000）
         )
 
     @property

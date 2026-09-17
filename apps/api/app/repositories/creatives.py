@@ -85,8 +85,12 @@ class VariantRepository:
         return list(self.db.scalars(stmt).all())
 
     def get_by_asset(self, asset_id: str) -> CreativeVariant | None:
+        # 显式排序兜底：asset 正常只属一个 variant，但 scalar 不带 ORDER BY
+        # 时多行结果不可预期（P2-14）
         return self.db.scalar(
-            select(CreativeVariant).where(CreativeVariant.asset_id == asset_id)
+            select(CreativeVariant)
+            .where(CreativeVariant.asset_id == asset_id)
+            .order_by(CreativeVariant.created_at)
         )
 
     def list_by_creative(self, creative_id: str) -> list[CreativeVariant]:

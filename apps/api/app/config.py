@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     minio_access_key: str = "augura"
     minio_secret_key: str = "augura123"
     minio_bucket: str = "creative-assets"
+    # MinIO 是否走 TLS：compose 默认 plain http，生产可经 MINIO_SECURE=true 开启（P2-26）
+    minio_secure: bool = False
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     vision_model: str = "gpt-4o"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from typing import Literal, Sequence
 
 from openai import BadRequestError, OpenAI
@@ -19,6 +20,8 @@ from openai import BadRequestError, OpenAI
 from app.schemas.analysis import AnalysisPayload
 from app.services import ip_pack
 from app.services.settings import AIConfig
+
+logger = logging.getLogger(__name__)
 
 # Strict JSON schema for response_format — mirrors contract §4 exactly.
 ANALYSIS_JSON_SCHEMA: dict[str, object] = {
@@ -101,7 +104,12 @@ class AnalysisService:
             {"role": "user", "content": content},
         ]
         raw = self._complete(messages)
-        parsed: object = json.loads(raw)
+        try:
+            parsed: object = json.loads(raw)
+        except json.JSONDecodeError:
+            # 偶发非 JSON 输出（截断/前缀文本）：重试一次，与 _complete 的降级哲学一致（P2-25）
+            logger.warning("analyze_frames: provider returned non-JSON output, retrying once")
+            parsed = json.loads(self._complete(messages))
         return AnalysisPayload.model_validate(_coerce_list_fields(parsed))
 
     def _complete(self, messages: list[dict[str, object]]) -> str:
@@ -125,6 +133,7 @@ class AnalysisService:
             model=self._vision_model,
             messages=messages,  # type: ignore[arg-type]
             response_format={"type": "json_object"},
+            max_tokens=2000,  # 与 strict 分支一致（P2-24）
         )
         return completion.choices[0].message.content or "{}"
 

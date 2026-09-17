@@ -22,8 +22,16 @@ SMART_FRAME_COUNT = 8
 CONTACT_SHEET_COLS = 4
 
 
+# ffmpeg/ffprobe 子进程的超时兜底：单条素材的媒体操作不该无限挂住
+# 分析管线（P2-13）。大文件抽帧/拼图正常在几十秒内，300s 已是宽松上限
+SUBPROCESS_TIMEOUT_SECONDS = 300
+
+
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    return subprocess.run(
+        command, capture_output=True, text=True, check=False,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+    )
 
 
 def probe_duration_seconds(video_path: str) -> float:

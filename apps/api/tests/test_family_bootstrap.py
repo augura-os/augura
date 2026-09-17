@@ -252,7 +252,9 @@ class TestConfirmFamily:
         ).all()
         assert len(logs) == 2
         for log in logs:
-            assert log.new_value.startswith("auto: D01 改名后的族（智能建族人工确认）")
+            # 人工确认的批量归族不带 auto: 前缀（不进 judge 自动改判率桶）
+            assert log.new_value.startswith("D01 改名后的族（智能建族人工确认）")
+            assert not log.new_value.startswith("auto:")
         assert _bootstrap_rows(db_session) == []
 
     def test_confirm_skips_already_assigned_members(

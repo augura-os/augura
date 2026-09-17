@@ -11,8 +11,11 @@
   人工 edit_logs——与建议一致 = 采纳，不一致/实体被删 = 驳回，
   无后续动作 = 未决（不计入分母）
 - 改判率 > 30%（约 κ < 0.7）→ 对应类别 judge_auto_enabled:<kind>
-  降级为 false；总开关 judge_auto_enabled 仍按整体改判率升降，
-  生效条件 = 总闸开 AND 类别闸开（judge_auto_allowed）
+  降级为 false；生效条件 = 总闸开 AND 类别闸开（judge_auto_allowed）
+- 两层刹车模型（P0-2）：类别闸管"类别级失控"——单类别改判超限只降
+  该类别，互不影响；总闸 judge_auto_enabled 定位为"系统性故障急停"，
+  按整体条数加权（条数加权 = 体量 = 影响面），只有跨类别大面积改判
+  才踩。总闸费率口径不变
 - 样本量 < MIN_SAMPLE 不动任何开关
 - 刹车动作（降级/恢复）双留痕：edit_logs（entity_type="judge"，
   auto: 前缀）+ judge_suggestions kind="auto_brake" 收件箱通知；

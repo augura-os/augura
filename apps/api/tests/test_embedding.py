@@ -554,6 +554,59 @@ class TestSplitRepresentative:
         assert new_creative.embedding_count == 0
 
 
+
+class TestSplitRemainderRecompute:
+    """P0-3 残留：拆走部分成员后，源族代表向量/计数按剩余成员重算。"""
+
+    def test_source_recomputed_from_remaining_members(
+        self, db_session: Session
+    ) -> None:
+        from app.api.routes.graph import split_variants
+        from app.schemas.graph import SplitRequest
+
+        creative = Creative(
+            id=str(uuid.uuid4()), name="source",
+            # 陈旧代表向量：三条成员（含将被拆走的 [1,1]）的均值口径
+            representative_embedding=[2.0 / 3.0, 2.0 / 3.0], embedding_count=3,
+        )
+        db_session.add(creative)
+        db_session.flush()
+        stay_vectors = [[1.0, 0.0], [0.0, 1.0]]
+        leaving_vector = [1.0, 1.0]
+        staying: list[str] = []
+        for i, vector in enumerate([*stay_vectors, leaving_vector]):
+            asset = CreativeAsset(
+                id=str(uuid.uuid4()), filename=f"{i}.mp4", file_type="video",
+                storage_key=f"test/{uuid.uuid4()}",
+            )
+            variant = CreativeVariant(
+                id=str(uuid.uuid4()), creative_id=creative.id,
+                asset_id=asset.id, name=f"v{i}", embedding=vector,
+            )
+            db_session.add_all([asset, variant])
+            db_session.flush()
+            if i < 2:
+                staying.append(variant.id)
+            else:
+                leaving_id = variant.id
+
+        result = split_variants(
+            SplitRequest(creative_id=creative.id, variant_ids=[leaving_id]),
+            db_session,
+            get_settings(),
+        )
+        assert result.success is True
+        db_session.expire_all()
+        # 源族还在（剩 2 个成员），代表向量重算为剩余成员均值
+        source = CreativeRepository(db_session).get(creative.id)
+        assert source is not None
+        assert source.representative_embedding == [0.5, 0.5]
+        assert source.embedding_count == 2
+        # 新族只带被拆成员
+        moved = VariantRepository(db_session).get(leaving_id)
+        assert moved is not None and moved.creative_id != creative.id
+
+
 class TestBackfill:
     """存量向量回填（E2 设计 §4.4）：三处覆盖 + 按成员重算 + 分批 + 容错。"""
 

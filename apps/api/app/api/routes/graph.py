@@ -36,6 +36,7 @@ from app.schemas.graph import (
 )
 from app.services import graph_sync, merge_ops
 from app.services.clustering import mean_embeddings
+from app.services.embedding import recompute_creative_representative
 from app.services.pipeline import cleanup_creative_if_empty
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,8 @@ def split_variants(
     )
     for variant in variants:
         variant_repo.move_to_creative(variant, new_creative.id)
+    # P0-3 残留：成员被拆走后，源族代表向量/计数按剩余成员重算
+    recompute_creative_representative(db, creative)
     EditLogRepository(db).record(
         entity_type="creative",
         entity_id=creative.id,

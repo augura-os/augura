@@ -72,7 +72,7 @@ def run_dna_assignments(
             text(
                 "select a.hook, a.gameplay from analysis_results a "
                 "join creative_variants v on v.asset_id = a.asset_id "
-                "where v.creative_id = :cid limit 1"
+                "where v.creative_id = :cid order by a.created_at limit 1"
             ),
             {"cid": creative.id},
         ).first()
@@ -87,7 +87,7 @@ def run_dna_assignments(
             votes=suggestion.votes, reason=suggestion.reason,
         )
         if suggestion.votes >= 3 and auto_enabled:
-            print(f"auto  D{ suggestion.dna.code} <- {creative.name}")
+            logger.info("auto  D%s <- %s", suggestion.dna.code, creative.name)
             if not dry_run:
                 db.execute(
                     text("update creatives set dna_id = :d where id = :id"),
@@ -96,7 +96,10 @@ def run_dna_assignments(
                 log(db, creative.id, "dna_id",
                     f"auto: {suggestion.dna.code} {suggestion.dna.name}（{suggestion.reason}）")
         else:
-            print(f"sugg  D{suggestion.dna.code} ({suggestion.votes}/3) <- {creative.name}")
+            logger.info(
+                "sugg  D%s (%s/3) <- %s",
+                suggestion.dna.code, suggestion.votes, creative.name,
+            )
 
 
 def run_merge_judgements(
@@ -132,7 +135,7 @@ def run_merge_judgements(
                 text(
                     "select a.hook, a.conflict, a.gameplay from analysis_results a "
                     "join creative_variants v on v.asset_id = a.asset_id "
-                    "where v.creative_id = :cid limit 1"
+                    "where v.creative_id = :cid order by a.created_at limit 1"
                 ),
                 {"cid": cid},
             ).first()
@@ -169,7 +172,7 @@ def run_merge_judgements(
                         commit=False,  # 事务边界交给调用方（见 merge_ops docstring）
                     )
                 except merge_ops.MergeBlocked as exc:
-                    print(f"blocked {item.title[:50]} :: {exc}")
+                    logger.warning("blocked %s :: %s", item.title[:50], exc)
                 else:
                     # 已结案：不写建议，并清掉此前可能残留的同对建议
                     delete_suggestion(
@@ -180,19 +183,19 @@ def run_merge_judgements(
                         db, kind="merge_pair", left_id=item.related_creative_id,
                         right_id=item.creative_id,
                     )
-                    print(f"auto  merged {item.title[:50]}（对齐 {alignment:.0%}）")
+                    logger.info("auto  merged %s（对齐 %.0f%%）", item.title[:50], alignment * 100)
                     continue
             else:
-                print(f"measure {alignment!r} < 0.90，只写建议：{item.title[:50]}")
+                logger.info("measure %r < 0.90，只写建议：%s", alignment, item.title[:50])
 
         upsert_suggestion(
             db, kind="merge_pair", left_id=item.creative_id,
             right_id=item.related_creative_id, verdict=verdict,
             votes=judgement.votes, reason=judgement.reason,
         )
-        print(
-            f"judge {verdict:5s} ({judgement.votes}/3) "
-            f"{item.title[:50]} :: {judgement.reason[:40]}"
+        logger.info(
+            "judge %-5s (%s/3) %s :: %s",
+            verdict, judgement.votes, item.title[:50], judgement.reason[:40],
         )
 
 

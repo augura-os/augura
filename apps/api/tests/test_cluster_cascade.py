@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import Creative, CreativeAsset, CreativeVariant, EditLog
+from app.repositories.settings import SettingsRepository
 from app.services import pipeline
 from app.services.pipeline import _cluster
 
@@ -337,3 +338,54 @@ class TestRepresentativeDrift:
         assert creative.representative_embedding == pytest.approx([0.95, 0.05])
         assert creative.embedding_count == 2
         assert creative.representative_text == "new text"
+
+
+class TestClusterGate:
+    """P0-2 两层刹车：cluster 类别闸（或总闸）关闭时 _cluster 不做自动归入——
+    新素材落散点新建 creative，且连视频测量成本都不花。"""
+
+    def test_category_gate_blocks_attach(
+        self, db_session: Session, tmp_path: Path, monkeypatch
+    ) -> None:
+        SettingsRepository(db_session).set("judge_auto_enabled:cluster", "false")
+        existing = _creative_with_video(db_session, name="gated-target")
+        # 文本唯一候选且远超阈值（0.90），不加闸必 attach
+        monkeypatch.setattr(
+            pipeline, "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [(existing, 0.90)][:limit],
+        )
+
+        def _forbidden(_a: str, _b: str):  # noqa: ANN202
+            raise AssertionError("刹车期间不应触发视频测量")
+
+        monkeypatch.setattr(pipeline, "measure_pair", _forbidden)
+        asset = _new_asset(db_session)
+        creative, _ = _cluster(
+            db_session, asset, "gated-target", None, "gated-target",
+            settings=_settings(tmp_path),
+            storage=_FakeStorage(_settings(tmp_path)),
+            local_video=_local_video(tmp_path),
+        )
+        assert creative.id != existing.id
+        assert _cluster_logs(db_session, existing.id) == []
+
+    def test_master_gate_blocks_attach(
+        self, db_session: Session, tmp_path: Path, monkeypatch
+    ) -> None:
+        SettingsRepository(db_session).set("judge_auto_enabled", "false")
+        existing = _creative_with_video(db_session, name="master-gated")
+        monkeypatch.setattr(
+            pipeline, "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [(existing, 0.90)][:limit],
+        )
+        monkeypatch.setattr(pipeline, "measure_pair", _measure(0.99))
+        asset = _new_asset(db_session)
+        creative, _ = _cluster(
+            db_session, asset, "master-gated", None, "master-gated",
+            settings=_settings(tmp_path),
+            storage=_FakeStorage(_settings(tmp_path)),
+            local_video=_local_video(tmp_path),
+        )
+        # 即便视频测量会对齐 0.99，总闸关闭时也不测量、不归入
+        assert creative.id != existing.id
+        assert _cluster_logs(db_session, existing.id) == []

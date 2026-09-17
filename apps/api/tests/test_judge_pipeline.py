@@ -461,3 +461,60 @@ class TestPipelineTrigger:
         # 不抛异常，既有数据完好
         judge_pipeline.run_post_analysis(db_session, _fake_config(), creative.id)
         assert db_session.get(Creative, creative.id) is not None
+
+
+class TestReanalysisMoveRecompute:
+    """P0-3 残留：再分析把 variant 搬到别的 creative 后，旧族的
+    representative_embedding / embedding_count 必须按剩余成员重算——
+    否则旧族带着搬走成员的向量继续参与 E2 召回。"""
+
+    def test_old_creative_recomputed_after_move(
+        self, db_session: Session, pipeline_mocks: None, monkeypatch
+    ) -> None:
+        from app.services.pipeline import run_analysis_pipeline
+
+        old = Creative(
+            id=str(uuid.uuid4()), name="old-home",
+            # 陈旧代表向量：含将被搬走成员的向量痕迹
+            representative_embedding=[1.0, 1.0], embedding_count=2,
+        )
+        staying_asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="KS_EN-stay.mp4", file_type="video",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        moving_asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="KS_EN-move.mp4", file_type="video",
+            storage_key=f"test/{uuid.uuid4()}", analysis_status="pending",
+        )
+        db_session.add_all([old, staying_asset, moving_asset])
+        db_session.flush()
+        db_session.add_all([
+            CreativeVariant(
+                id=str(uuid.uuid4()), creative_id=old.id,
+                asset_id=staying_asset.id, name="stay", embedding=[0.0, 1.0],
+            ),
+            CreativeVariant(
+                id=str(uuid.uuid4()), creative_id=old.id,
+                asset_id=moving_asset.id, name="move", embedding=[1.0, 0.0],
+            ),
+        ])
+        db_session.commit()  # 管线自建 session，必须真实落库才能读到
+
+        monkeypatch.setattr(
+            judge_pipeline, "run_post_analysis", lambda *a, **k: None
+        )
+        # fake 分析产出 "auto-judge-creative"：与 old-home 文本零重叠 →
+        # _cluster 新建 creative，moving_asset 的 variant 被搬走
+        run_analysis_pipeline(moving_asset.id)
+
+        db_session.expire_all()
+        refreshed = db_session.get(Creative, old.id)
+        assert refreshed is not None
+        assert refreshed.representative_embedding == [0.0, 1.0]
+        assert refreshed.embedding_count == 1
+        moved = db_session.scalars(
+            select(CreativeVariant).where(
+                CreativeVariant.asset_id == moving_asset.id
+            )
+        ).one()
+        assert moved.creative_id != old.id

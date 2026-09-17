@@ -85,6 +85,12 @@ def upload_files(
         data = upload.file.read()
         if not data:
             raise ApiError(400, f"文件为空：{filename}")
+        if len(data) > settings.upload_max_bytes:
+            limit = settings.upload_max_bytes
+            limit_text = (
+                f"{limit / 1024 ** 3:g} GB" if limit >= 1024**3 else f"{limit / 1024 ** 2:g} MB"
+            )
+            raise ApiError(413, f"文件超过大小上限：{filename}（上限 {limit_text}）")
         mime_type = upload.content_type or fallback_mime
 
         # Excel is parsed before anything is persisted, so an invalid file

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { uploadFile } from "../services/api";
+import { translate } from "../lib/i18n";
 
 export type UploadStatus = "queued" | "uploading" | "success" | "skipped" | "error";
 
@@ -13,9 +14,22 @@ export interface UploadItem {
 
 const ACCEPTED_EXTENSIONS = ["mp4", "mov", "qt", "png", "jpg", "jpeg", "xlsx", "xls"];
 
+// Mirrors the backend default (Settings.upload_max_bytes, 1 GiB).
+export const UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
+
 export function isAcceptedFile(file: File): boolean {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   return ACCEPTED_EXTENSIONS.includes(ext);
+}
+
+function initialState(file: File): Pick<UploadItem, "status" | "message"> {
+  if (!isAcceptedFile(file)) {
+    return { status: "error", message: "Unsupported file type" };
+  }
+  if (file.size > UPLOAD_MAX_BYTES) {
+    return { status: "error", message: translate("upload.tooLarge").replace("{n}", "1 GB") };
+  }
+  return { status: "queued", message: "" };
 }
 
 function patchItem(
@@ -72,9 +86,8 @@ export function useUpload() {
     const next: UploadItem[] = files.map((file) => ({
       id: crypto.randomUUID(),
       file,
-      status: isAcceptedFile(file) ? "queued" : "error",
       progress: 0,
-      message: isAcceptedFile(file) ? "" : "Unsupported file type",
+      ...initialState(file),
     }));
     setItems((prev) => [...prev, ...next]);
     for (const item of next) {

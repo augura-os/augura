@@ -98,6 +98,8 @@ def vote_json(
         )
         if result is None:
             continue
+        if not isinstance(result, dict):
+            continue
         value = result.get(key)
         if value is not None:
             values.append(value if not isinstance(value, str) else value.strip())

@@ -327,7 +327,11 @@ def delete_asset(
     asset = _get_asset_or_404(db, asset_id)
 
     # 1) MinIO objects (original + cached thumbnail) — best effort.
-    candidate_keys = {asset.storage_key, f"{asset.storage_key}.thumb.jpg"}
+    candidate_keys = {
+        asset.storage_key,
+        f"{asset.storage_key}.thumb.jpg",
+        f"{asset.storage_key}.contact.jpg",
+    }
     if asset.thumbnail_key:
         candidate_keys.add(asset.thumbnail_key)
     for key in candidate_keys:

@@ -341,6 +341,8 @@ export const en: Record<string, string> = {
     " (Chinese-language dashboards can be imported, but are not used as the basis for the Daily Brief).",
   "upload.viewUploaded": "View {n} uploaded file{s} in Assets →",
   "upload.clearList": "Clear list",
+  "upload.tooLarge": "File exceeds the {n} size limit",
+  "upload.maxSizeNote": "Maximum size per file: {n}.",
 
   // --- settings page ---
   "settings.title": "Settings",

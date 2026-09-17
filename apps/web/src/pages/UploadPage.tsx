@@ -17,7 +17,7 @@ export default function UploadPage() {
         <header>
           <h1 className="text-lg font-semibold text-neutral-900">{t("upload.title")}</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            {t("upload.subtitle")}
+            {t("upload.subtitle")} {t("upload.maxSizeNote").replace("{n}", "1 GB")}
           </p>
           <p className="mt-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
             {t("upload.fbNoteA")}

@@ -46,7 +46,8 @@ from app.services.clustering import (
     merge_embedding,
     top_creative_matches_by_text,
 )
-from app.services.embedding import embed_analysis_text
+from app.services.embedding import embed_analysis_text, recompute_creative_representative
+from app.services.judge_calibration import judge_auto_allowed
 from app.services.media import build_contact_sheet, extract_smart_frames
 from app.services.merge_measure import (
     MIN_ALIGNED_FRACTION_FOR_AUTO,
@@ -215,8 +216,13 @@ def _cluster(
     attach: Creative | None = None
     evidence = ""
     measured: list[tuple[Creative, float]] = []
+    # cluster 类别闸（P0-2 两层模型：类别级失控只停本类别自动执行）：
+    # 刹车期间不做自动归入——新素材落散点（新建 creative），连测量成本
+    # 一起省；与 dna_assign/merge_pair 同一降级哲学
+    cluster_auto = judge_auto_allowed(db, "cluster")
     if (
-        settings is not None
+        cluster_auto
+        and settings is not None
         and storage is not None
         and asset.file_type == "video"
         and local_video is not None
@@ -232,7 +238,7 @@ def _cluster(
             f"视频帧对齐 {aligned:.0%} ≥ {MIN_ALIGNED_FRACTION_FOR_AUTO:.0%}"
             f"（文本 {decision.score:.2f}）"
         )
-    elif decision.action == "attach" and decision.creative is not None:
+    elif cluster_auto and decision.action == "attach" and decision.creative is not None:
         attach = decision.creative
         margin_text = (
             f"，margin {decision.margin:.2f}" if decision.margin is not None else ""
@@ -365,6 +371,11 @@ def _run_analysis_pipeline(asset_id: str) -> None:
             previous_creative_id is not None
             and previous_creative_id != creative.id
         ):
+            # P0-3 残留：variant 被再分析搬走后，旧族代表向量/计数按剩余
+            # 成员重算（不重算会带着搬走成员的向量继续参与召回）
+            old_creative = CreativeRepository(db).get(previous_creative_id)
+            if old_creative is not None:
+                recompute_creative_representative(db, old_creative)
             cleanup_creative_if_empty(db, settings, previous_creative_id)
 
         if variant is not None:

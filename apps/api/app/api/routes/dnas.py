@@ -217,12 +217,15 @@ def confirm_family(
             continue
         dna_repo.assign_creative(creative, dna)
         source = "智能建族并入已有家族" if attach_code else "智能建族人工确认"
+        # 人工确认的批量归族不是机器自动执行：不带 auto: 前缀——否则会被
+        # judge_calibration 计入 dna_assign 自动改判率桶（P0-2 统计污染），
+        # 在 intervention 口径里它本就是人工裁决（收件箱逐族确认）
         edit_logs.record(
             entity_type="creative",
             entity_id=creative.id,
             action="update",
             field="dna_id",
-            new_value=f"auto: {dna.code} {dna.name}（{source}）",
+            new_value=f"{dna.code} {dna.name}（{source}）",
         )
         assigned.append(creative)
 

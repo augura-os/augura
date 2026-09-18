@@ -27,6 +27,14 @@ Augura systematizes this. Upload a creative and AI decomposes it into hook, conf
 
 Think of it as local-first creative intelligence infrastructure: your data stays on your machine by default (frame samples go to the model provider you configure during AI analysis), judgment stays with you, and the repetitive work goes to the system.
 
+<p align="center">
+  <img src="docs/assets/screenshot-graph-inbox.png" alt="Augura main interface — the creative graph on the left, the review inbox on the right" width="100%">
+</p>
+
+<p align="center">
+  <sub>The main interface: the creative graph on the left (DNA → Creative → Variant → Asset), and the review inbox on the right waiting for one-word rulings.</sub>
+</p>
+
 ## Features
 
 - **AI creative analysis** — videos are frame-sampled and read by a vision model into structured JSON (hook / conflict / gameplay / reward / characters / emotion / tags). Low-confidence results route to human review — the AI never gets to guess silently.

@@ -27,6 +27,14 @@ Augura 把这件事系统化：上传素材，AI 把它拆成钩子、冲突、�
 
 可以理解为本地优先的 Creative Intelligence 基础设施：数据默认存在你的机器上（AI 分析时抽帧发给你自己配置的模型服务），判断留给你，重复劳动交给系统。
 
+<p align="center">
+  <img src="docs/assets/screenshot-graph-inbox.png" alt="Augura 主界面 —— 左侧创意图谱，右侧审核收件箱" width="100%">
+</p>
+
+<p align="center">
+  <sub>主界面：左边是创意图谱（DNA → Creative → Variant → Asset），右边是待裁决的审核收件箱，每一条都等着你一句话定性。</sub>
+</p>
+
 ## 功能特性
 
 - **AI 素材解析** — 视频抽帧后由视觉模型输出结构化 JSON（钩子/冲突/玩法/奖励/角色/情绪/标签）。分析没把握的自动进人工复核，不让 AI 硬猜。

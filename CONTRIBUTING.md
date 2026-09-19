@@ -26,7 +26,7 @@ fix(api): coerce string list fields from JSON Mode providers
 ## 3. Pull requests
 
 1. Before opening a PR, make sure `pytest`, `vitest run`, `ruff check` and `npm run build` are all green.
-2. PR description, four sections: motivation / changes / verification / rollback.
+2. PR description follows `.github/PULL_REQUEST_TEMPLATE.md`, five sections: motivation / changes / verification / rollback / checklist. A section with no content says "none (why)" — never drop a section heading. This also applies when the PR is created via the API, which does not prefill the template.
 3. A human reviews and merges.
 
 ### Hard review rules

@@ -34,8 +34,13 @@ class Settings(BaseSettings):
     # 单文件上传大小上限（字节），默认 1 GB；超限返回 413（UPLOAD_MAX_BYTES 可调）
     upload_max_bytes: int = 1024 * 1024 * 1024
     # 同时运行的分析流水线数上限：每个 pipeline 在整个 LLM 调用期间持有
-    # 一个 DB session，不封顶会把连接池打爆（批量上传 = 每文件一个后台任务）
+    # 一个 DB session，不封顶会把连接池打爆（批量上传 = 每文件一个后台任务）。
+    # F3 双槽模型：本槽只覆盖分析核心（抽帧/LLM/嵌入/聚类 + completed 落库），
+    # 判定阶段在槽释放后走下面的 judge_concurrency 独立限流
     analysis_concurrency: int = 3
+    # 同时运行的判定（judge）阶段数上限：判定同样长时间持有 session 跑 LLM，
+    # 独立封顶——判定卡住只占判定槽，分析吞吐与连接池不再被拖死（F3 事故）
+    judge_concurrency: int = 2
 
 
 @lru_cache

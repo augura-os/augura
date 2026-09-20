@@ -58,6 +58,8 @@ def run_observation_judgements(db: Session, config, *, dry_run: bool) -> None:
             db, kind="observation_pair", left_id=source.id, right_id=target.id,
             verdict=judgement.verdict, votes=judgement.votes, reason=judgement.reason,
         )
+        if not dry_run:
+            db.commit()  # 对级短事务（F3）：下一对的 LLM 不跨本对未提交写
         print(
             f"obs   {judgement.verdict:7s} ({judgement.votes}/3) "
             f"{item.title[:50]} :: {judgement.reason[:40]}"
@@ -106,6 +108,8 @@ def run_verdict_judgements(db: Session, config, *, dry_run: bool) -> None:
             db, kind="verdict", left_id=derivation.id, right_id=None,
             verdict=judgement.verdict, votes=judgement.votes, reason=judgement.reason,
         )
+        if not dry_run:
+            db.commit()  # 条目级短事务（F3）：下一条的 LLM 不跨本条未提交写
         print(
             f"verd  {judgement.verdict:12s} ({judgement.votes}/3) "
             f"{creative.name[:36]} [{derivation.factor}] :: {judgement.reason[:36]}"
@@ -121,12 +125,14 @@ def main() -> None:
     try:
         settings = get_settings()
         config = resolve_ai_config(db, settings)
-        # 总闸 AND 类别闸（judge_calibration 按类别单独降级）
+        # 总闸 AND 类别闸（judge_calibration 按类别单独降级）；
+        # commit=not dry_run：逐条/逐对短事务提交（F3），dry_run 照旧不落地
         run_dna_assignments(db, config, dry_run=dry_run,
-                            auto_enabled=judge_auto_allowed(db, "dna_assign"))
+                            auto_enabled=judge_auto_allowed(db, "dna_assign"),
+                            commit=not dry_run)
         run_merge_judgements(db, config, dry_run=dry_run,
                              auto_enabled=judge_auto_allowed(db, "merge_pair"),
-                             settings=settings)
+                             settings=settings, commit=not dry_run)
         run_observation_judgements(db, config, dry_run=dry_run)
         run_verdict_judgements(db, config, dry_run=dry_run)
         if not dry_run:

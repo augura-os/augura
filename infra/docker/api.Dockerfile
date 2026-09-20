@@ -12,9 +12,11 @@ WORKDIR /app
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY apps/api/requirements.txt /app/apps/api/requirements.txt
+COPY apps/api/requirements-embed.txt /app/apps/api/requirements-embed.txt
 COPY packages/graph /app/packages/graph
 RUN pip install --no-cache-dir -e /app/packages/graph \
-    && pip install --no-cache-dir -r /app/apps/api/requirements.txt
+    && pip install --no-cache-dir -r /app/apps/api/requirements.txt \
+    && pip install --no-cache-dir -r /app/apps/api/requirements-embed.txt
 
 COPY apps/api /app/apps/api
 

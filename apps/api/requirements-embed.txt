@@ -1,6 +1,5 @@
-# 可选依赖：本地 embedding 后端（fastembed + onnxruntime，约 +150MB）。
-# CI 与默认部署不装——embedding_backend=local 但缺依赖时自动降级文本兜底
-# （见 app/services/embedding.py）。安装：pip install -r requirements-embed.txt
-# 注意：infra/docker/api.Dockerfile 目前只装 requirements.txt（红线文件，
-# 本 PR 不动）——官方镜像启用本地 embedding 需镜像维护方加装本文件。
+# 本地 embedding 后端依赖（fastembed + onnxruntime，约 +150MB）。
+# 官方镜像（infra/docker/api.Dockerfile）默认安装本文件，向量召回开箱即用；
+# 源码部署：pip install -r requirements-embed.txt。
+# embedding_backend=local 但缺依赖时自动降级文本兜底（见 app/services/embedding.py）。
 fastembed==0.8.0

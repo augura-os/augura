@@ -45,8 +45,9 @@ def merge_creatives(
     """把 source 合并进 target（source 删除），返回全部守卫命中（含 warn）。
 
     校验失败/守卫拦截抛 ApiError（人工）或 MergeBlocked（自动）。
-    commit=False 时不落 commit——自动合并跑在调用方的事务边界里
-    （judge_pipeline 的 begin_nested 容错依赖它），由调用方统一提交。
+    commit=False 时不落 commit——自动合并跑在调用方的事务边界里，由
+    调用方统一提交（judge_pipeline 逐条 / missed_merge_scan 逐对提交，
+    F3 短事务纪律）。
     """
     if source_creative_id == target_creative_id:
         raise ApiError(400, "不能与自身合并（source 与 target 相同）")

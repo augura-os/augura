@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import Settings
@@ -55,11 +56,16 @@ def maybe_consolidate(
     """每次分析完成后调用：计数 +1；满足条件则全量扫描 + 阈值校准。
 
     返回是否真的跑了巩固。失败只记日志（调用方在管线上，不能炸）。
+
+    F3 事务纪律：计数、扫描、留痕、刹车、回流、回填各自独立短事务
+    （各自 commit）——此前全部堆在调用方（run_post_analysis）的长事务
+    里，校准的 UPDATE settings 曾被管线行锁堵住 46 分钟。
     """
     try:
         repo = SettingsRepository(db)
         new_since = int(repo.get(NEW_SINCE_SETTING) or 0) + 1
         repo.set(NEW_SINCE_SETTING, str(new_since))
+        db.commit()  # 计数是独立短事务：全扫的 LLM 调用不得跨未提交写
 
         raw = repo.get(LAST_RUN_SETTING)
         days_since: int | None = None
@@ -77,7 +83,9 @@ def maybe_consolidate(
         from app.services.missed_merge_scan import scan_missed_merges
         from app.services.threshold_calibration import suggest_threshold
 
-        stats = scan_missed_merges(db, settings, config, emit=lambda _msg: None)
+        stats = scan_missed_merges(
+            db, settings, config, emit=lambda _msg: None, commit=True
+        )
         suggestion = suggest_threshold(db)  # 纯文本+分析特征，秒级
 
         repo.set(LAST_RUN_SETTING, datetime.now(timezone.utc).isoformat())
@@ -96,19 +104,22 @@ def maybe_consolidate(
                 + "）"
             ),
         )
+        db.commit()  # 巩固留痕独立短事务
         logger.info(
             "周期巩固完成：召回 %d，建议 %d，自动合并 %d",
             stats.recalled, stats.suggested, stats.merged,
         )
 
         # 刹车随行：judge 改判率超限自动降级（油门已自动，刹车不能靠人
-        # 记得跑脚本）。独立 savepoint + logger.debug 降级——刹车失败
-        # 绝不波及巩固与管线；成功降级随管线末尾统一 commit 落库。
+        # 记得跑脚本）。独立 savepoint + 独立提交——闸门写是自己的短事务
+        # （曾随管线长事务末尾统一提交，等锁 46 分钟）；失败降级
+        # logger.debug，绝不波及巩固与管线。
         try:
             from app.services.judge_calibration import run_calibration
 
             with db.begin_nested():
                 brake = run_calibration(db)
+            db.commit()
             for event in brake.events:
                 logger.info(
                     "judge 刹车：%s %s（改判率 %.1f%%，样本 %d）",
@@ -118,13 +129,14 @@ def maybe_consolidate(
         except Exception:  # noqa: BLE001 — 刹车失败不拖垮巩固
             logger.debug("judge 刹车校准失败", exc_info=True)
 
-        # 规则层回流随行：人工改判挖差异词 → 收件箱建议（同一容错机制；
-        # 样本不足时服务内自己跳过）
+        # 规则层回流随行：人工改判挖差异词 → 收件箱建议（同一容错机制 +
+        # 独立提交；样本不足时服务内自己跳过）
         try:
             from app.services import rule_feedback
 
             with db.begin_nested():
                 suggested = rule_feedback.suggest_keywords(db)
+            db.commit()
             if suggested:
                 logger.info("规则层回流：浮出 %d 条规则词建议", suggested)
         except Exception:  # noqa: BLE001 — 挖掘失败不拖垮巩固
@@ -132,7 +144,7 @@ def maybe_consolidate(
 
         # 向量回填随行（E2 设计 §4.4）：每轮巩固顺带补一批存量向量
         # （≤ BACKFILL_BATCH_SIZE 条），几天内自然补完；单条失败跳过。
-        # 同一容错机制——回填失败绝不波及巩固与管线
+        # 同一容错机制 + 独立提交——回填失败绝不波及巩固与管线
         try:
             from app.services.embedding import (
                 BACKFILL_BATCH_SIZE,
@@ -143,6 +155,7 @@ def maybe_consolidate(
                 backfill = backfill_embeddings(
                     db, config, limit=BACKFILL_BATCH_SIZE
                 )
+            db.commit()
             if backfill.analyses:
                 logger.info(
                     "向量随行回填：补 %d 条（剩余 %d）",
@@ -151,6 +164,10 @@ def maybe_consolidate(
         except Exception:  # noqa: BLE001 — 回填失败不拖垮巩固
             logger.debug("向量随行回填失败", exc_info=True)
         return True
-    except Exception:  # noqa: BLE001 — 巩固失败不拖垮分析管线
+    except SQLAlchemyError:  # noqa: BLE001 — 巩固失败不拖垮分析管线
+        db.rollback()  # 事务已中止：回滚恢复会话；已提交的阶段不受影响
+        logger.exception("周期巩固失败")
+        return False
+    except Exception:  # noqa: BLE001 — 非 DB 异常事务未坏，无需回滚
         logger.exception("周期巩固失败")
         return False

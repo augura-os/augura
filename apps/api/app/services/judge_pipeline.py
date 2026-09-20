@@ -19,12 +19,14 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.models import Creative
 from app.repositories.settings import SettingsRepository
 from app.services import merge_ops
@@ -41,6 +43,11 @@ from app.services.merge_measure import (
 from app.services.settings import AIConfig
 
 logger = logging.getLogger(__name__)
+
+# 判定阶段并发槽（F3 双槽模型）：判定在分析槽（pipeline._PIPELINE_SLOTS）
+# 释放后运行，用本槽独立限流——判定挂起只占判定槽，分析通道不再被拖死
+# （事故时共用一个槽，判定卡住 → 分析槽不释放 → 上传任务占满线程池）
+_JUDGE_SLOTS = threading.Semaphore(get_settings().judge_concurrency)
 
 
 def log(db: Session, entity_id: str, field: str, new_value: str, action: str = "update") -> None:
@@ -62,44 +69,66 @@ def run_dna_assignments(
     dry_run: bool,
     auto_enabled: bool,
     creative_id: str | None = None,
+    commit: bool = True,
 ) -> None:
+    """逐条归族判定：分析取数 → suggest_dna（LLM）→ 写建议/自动归族。
+
+    F3 事务纪律：LLM 调用绝不跨未提交写。commit=True（默认，判定阶段）
+    每条 creative 的写入独立短事务立即提交，单条失败跳过本条、继续下
+    一条（DB 错误回滚本条事务恢复会话；LLM 等非 DB 异常事务未坏，
+    无需回滚——也避免共享 session 场景误伤调用方未提交状态）；
+    commit=False 事务边界归调用方（批量脚本末尾统一提交），行为与旧版
+    一致、异常原样上抛。
+    """
     stmt = select(Creative).where(Creative.dna_id.is_(None))
     if creative_id is not None:
         stmt = stmt.where(Creative.id == creative_id)
     creatives = list(db.scalars(stmt))
     for creative in creatives:
-        analyses = db.execute(
-            text(
-                "select a.hook, a.gameplay from analysis_results a "
-                "join creative_variants v on v.asset_id = a.asset_id "
-                "where v.creative_id = :cid order by a.created_at limit 1"
-            ),
-            {"cid": creative.id},
-        ).first()
-        if analyses is None:
-            continue
-        suggestion = suggest_dna(creative, analyses[0] or "", analyses[1] or "", db, config)
-        if suggestion is None:
-            continue
-        upsert_suggestion(
-            db, kind="dna_assign", left_id=creative.id, right_id=suggestion.dna.id,
-            verdict=f"{suggestion.dna.code} {suggestion.dna.name}",
-            votes=suggestion.votes, reason=suggestion.reason,
-        )
-        if suggestion.votes >= 3 and auto_enabled:
-            logger.info("auto  D%s <- %s", suggestion.dna.code, creative.name)
-            if not dry_run:
-                db.execute(
-                    text("update creatives set dna_id = :d where id = :id"),
-                    {"d": suggestion.dna.id, "id": creative.id},
-                )
-                log(db, creative.id, "dna_id",
-                    f"auto: {suggestion.dna.code} {suggestion.dna.name}（{suggestion.reason}）")
-        else:
-            logger.info(
-                "sugg  D%s (%s/3) <- %s",
-                suggestion.dna.code, suggestion.votes, creative.name,
+        try:
+            analyses = db.execute(
+                text(
+                    "select a.hook, a.gameplay from analysis_results a "
+                    "join creative_variants v on v.asset_id = a.asset_id "
+                    "where v.creative_id = :cid order by a.created_at limit 1"
+                ),
+                {"cid": creative.id},
+            ).first()
+            if analyses is None:
+                continue
+            suggestion = suggest_dna(creative, analyses[0] or "", analyses[1] or "", db, config)
+            if suggestion is None:
+                continue
+            upsert_suggestion(
+                db, kind="dna_assign", left_id=creative.id, right_id=suggestion.dna.id,
+                verdict=f"{suggestion.dna.code} {suggestion.dna.name}",
+                votes=suggestion.votes, reason=suggestion.reason,
             )
+            if suggestion.votes >= 3 and auto_enabled:
+                logger.info("auto  D%s <- %s", suggestion.dna.code, creative.name)
+                if not dry_run:
+                    db.execute(
+                        text("update creatives set dna_id = :d where id = :id"),
+                        {"d": suggestion.dna.id, "id": creative.id},
+                    )
+                    log(db, creative.id, "dna_id",
+                        f"auto: {suggestion.dna.code} {suggestion.dna.name}（{suggestion.reason}）")
+            else:
+                logger.info(
+                    "sugg  D%s (%s/3) <- %s",
+                    suggestion.dna.code, suggestion.votes, creative.name,
+                )
+            if commit and not dry_run:
+                db.commit()
+        except SQLAlchemyError:
+            if not commit:
+                raise
+            db.rollback()  # 事务已中止：回滚恢复会话，本条写入作废
+            logger.exception("归族判定失败 creative=%s（跳过本条）", creative.id)
+        except Exception:  # noqa: BLE001 — 非 DB 异常（LLM 等）：事务未坏无需回滚
+            if not commit:
+                raise
+            logger.exception("归族判定失败 creative=%s（跳过本条）", creative.id)
 
 
 def run_merge_judgements(
@@ -110,7 +139,15 @@ def run_merge_judgements(
     auto_enabled: bool,
     settings: Settings | None = None,
     creative_id: str | None = None,
+    commit: bool = True,
 ) -> None:
+    """逐对合并预裁：分析取数 → judge_pair（LLM）→ 自动合并或写建议。
+
+    F3 事务纪律同 run_dna_assignments：commit=True（默认）每对的写入
+    （含自动合并 + 建议清理）独立短事务提交，单对失败跳过本对、继续
+    下一对（DB 错误回滚本对事务）；commit=False 事务边界归调用方
+    （批量脚本），异常原样上抛。
+    """
     merge_auto = (
         auto_enabled
         and not dry_run
@@ -119,84 +156,100 @@ def run_merge_judgements(
     )
     candidates = review_service.merge_candidate_items(db)
     for item in candidates:
-        if not item.creative_id or not item.related_creative_id:
-            continue
-        if creative_id is not None and creative_id not in (
-            item.creative_id, item.related_creative_id
-        ):
-            continue  # scoped：只预裁涉及新 creative 的候选对
-        if find_prior_ruling(item.creative_name or "", item.related_creative_name or ""):
-            continue  # 既定裁决永不自动
-        if find_db_ruling(db, item.creative_name or "", item.related_creative_name or ""):
-            continue  # 收件箱结案裁决同样永不自动
-        analyses = {}
-        for cid in (item.creative_id, item.related_creative_id):
-            row = db.execute(
-                text(
-                    "select a.hook, a.conflict, a.gameplay from analysis_results a "
-                    "join creative_variants v on v.asset_id = a.asset_id "
-                    "where v.creative_id = :cid order by a.created_at limit 1"
-                ),
-                {"cid": cid},
-            ).first()
-            if row is None:
-                break
-            analyses[cid] = f"钩子：{row[0]}\n冲突：{row[1]}\n玩法：{row[2]}"
-        if len(analyses) != 2:
-            continue
-        judgement = judge_pair(
-            config,
-            analysis_a=analyses[item.creative_id],
-            analysis_b=analyses[item.related_creative_id],
-        )
-        if judgement is None:
-            continue
-        verdict = "merge" if judgement.same_creative else "split"
-
-        # 自动执行：LLM 3/3 判同一 + pHash 对齐率 ≥ 0.90（视频物证）+
-        # 开关开 + 无既定裁决（上面已查）+ merge_guard 无 block，
-        # 全部满足才合并；任一不满足维持只写建议
-        if merge_auto and judgement.same_creative and judgement.votes == 3:
-            alignment = measure_pair_alignment(
-                db, settings, item.creative_id, item.related_creative_id
+        try:
+            if not item.creative_id or not item.related_creative_id:
+                continue
+            if creative_id is not None and creative_id not in (
+                item.creative_id, item.related_creative_id
+            ):
+                continue  # scoped：只预裁涉及新 creative 的候选对
+            if find_prior_ruling(item.creative_name or "", item.related_creative_name or ""):
+                continue  # 既定裁决永不自动
+            if find_db_ruling(db, item.creative_name or "", item.related_creative_name or ""):
+                continue  # 收件箱结案裁决同样永不自动
+            analyses = {}
+            for cid in (item.creative_id, item.related_creative_id):
+                row = db.execute(
+                    text(
+                        "select a.hook, a.conflict, a.gameplay from analysis_results a "
+                        "join creative_variants v on v.asset_id = a.asset_id "
+                        "where v.creative_id = :cid order by a.created_at limit 1"
+                    ),
+                    {"cid": cid},
+                ).first()
+                if row is None:
+                    break
+                analyses[cid] = f"钩子：{row[0]}\n冲突：{row[1]}\n玩法：{row[2]}"
+            if len(analyses) != 2:
+                continue
+            judgement = judge_pair(
+                config,
+                analysis_a=analyses[item.creative_id],
+                analysis_b=analyses[item.related_creative_id],
             )
-            if alignment is not None and alignment >= MIN_ALIGNED_FRACTION_FOR_AUTO:
-                try:
-                    # 方向：item.related → item.creative（候选对的首个成员保留）
-                    merge_ops.merge_creatives(
-                        db,
-                        settings,
-                        item.related_creative_id,
-                        item.creative_id,
-                        auto=True,
-                        commit=False,  # 事务边界交给调用方（见 merge_ops docstring）
-                    )
-                except merge_ops.MergeBlocked as exc:
-                    logger.warning("blocked %s :: %s", item.title[:50], exc)
-                else:
-                    # 已结案：不写建议，并清掉此前可能残留的同对建议
-                    delete_suggestion(
-                        db, kind="merge_pair", left_id=item.creative_id,
-                        right_id=item.related_creative_id,
-                    )
-                    delete_suggestion(
-                        db, kind="merge_pair", left_id=item.related_creative_id,
-                        right_id=item.creative_id,
-                    )
-                    logger.info("auto  merged %s（对齐 %.0f%%）", item.title[:50], alignment * 100)
-                    continue
-            else:
-                logger.info("measure %r < 0.90，只写建议：%s", alignment, item.title[:50])
+            if judgement is None:
+                continue
+            verdict = "merge" if judgement.same_creative else "split"
 
-        upsert_suggestion(
-            db, kind="merge_pair", left_id=item.creative_id,
-            right_id=item.related_creative_id, verdict=verdict,
-            votes=judgement.votes, reason=judgement.reason,
-        )
-        logger.info(
-            "judge %-5s (%s/3) %s :: %s",
-            verdict, judgement.votes, item.title[:50], judgement.reason[:40],
-        )
+            # 自动执行：LLM 3/3 判同一 + pHash 对齐率 ≥ 0.90（视频物证）+
+            # 开关开 + 无既定裁决（上面已查）+ merge_guard 无 block，
+            # 全部满足才合并；任一不满足维持只写建议
+            if merge_auto and judgement.same_creative and judgement.votes == 3:
+                alignment = measure_pair_alignment(
+                    db, settings, item.creative_id, item.related_creative_id
+                )
+                if alignment is not None and alignment >= MIN_ALIGNED_FRACTION_FOR_AUTO:
+                    try:
+                        # 方向：item.related → item.creative（候选对的首个成员保留）
+                        merge_ops.merge_creatives(
+                            db,
+                            settings,
+                            item.related_creative_id,
+                            item.creative_id,
+                            auto=True,
+                            commit=False,  # 随本对条目级事务由下方统一提交（F2 契约）
+                        )
+                    except merge_ops.MergeBlocked as exc:
+                        logger.warning("blocked %s :: %s", item.title[:50], exc)
+                    else:
+                        # 已结案：不写建议，并清掉此前可能残留的同对建议
+                        delete_suggestion(
+                            db, kind="merge_pair", left_id=item.creative_id,
+                            right_id=item.related_creative_id,
+                        )
+                        delete_suggestion(
+                            db, kind="merge_pair", left_id=item.related_creative_id,
+                            right_id=item.creative_id,
+                        )
+                        logger.info(
+                            "auto  merged %s（对齐 %.0f%%）", item.title[:50], alignment * 100
+                        )
+                        if commit:
+                            db.commit()
+                        continue
+                else:
+                    logger.info("measure %r < 0.90，只写建议：%s", alignment, item.title[:50])
+
+            upsert_suggestion(
+                db, kind="merge_pair", left_id=item.creative_id,
+                right_id=item.related_creative_id, verdict=verdict,
+                votes=judgement.votes, reason=judgement.reason,
+            )
+            logger.info(
+                "judge %-5s (%s/3) %s :: %s",
+                verdict, judgement.votes, item.title[:50], judgement.reason[:40],
+            )
+            if commit and not dry_run:
+                db.commit()
+        except SQLAlchemyError:
+            if not commit:
+                raise
+            db.rollback()  # 事务已中止：回滚恢复会话，本对写入作废
+            logger.exception("合并预裁失败 %s（跳过本对）", item.title[:50])
+        except Exception:  # noqa: BLE001 — 非 DB 异常（LLM 等）：事务未坏无需回滚
+            if not commit:
+                raise
+            logger.exception("合并预裁失败 %s（跳过本对）", item.title[:50])
 
 
 def run_post_analysis(
@@ -207,43 +260,55 @@ def run_post_analysis(
 ) -> None:
     """分析成功后的自动判定：归族 + 涉及该 creative 的合并预裁。
 
-    在上传管线的 session 上运行并自行 commit；begin_nested 把失败回滚
-    限定在判定工作内（绝不波及管线此前已提交的 completed 状态），
-    失败只记日志（Human > AI：判定只是建议/自动级辅助）。
+    F3 事务纪律（长事务事故修复）：不再用一个大 begin_nested 包住全部
+    判定——那会把 edit_logs/judge_suggestions/creatives 的行锁持有时间
+    拉长到整个 LLM 判定过程（实测校准的 UPDATE settings 等了 46 分钟）。
+    改为各阶段独立容错 + 阶段内条目级/对级短事务（run_* / scan 自行
+    commit），LLM 调用绝不跨未提交写。判定运行在管线提交 completed
+    之后，任何失败只记日志（Human > AI：判定只是建议/自动级辅助）；
+    失败路径不 rollback——共享 session 场景下会误伤调用方未提交状态
+    （同 derivation_review 口径）。
     """
     try:
-        with db.begin_nested():
-            # 自动路径必须读类别闸：刹车踩下后该类别不再自动执行。
-            # 与 CLI 同口径——judge_auto_allowed = 总闸 AND 类别闸
-            run_dna_assignments(
-                db, config, dry_run=False,
-                auto_enabled=judge_auto_allowed(db, "dna_assign"),
-                creative_id=creative_id,
-            )
-            run_merge_judgements(
-                db, config, dry_run=False,
-                auto_enabled=judge_auto_allowed(db, "merge_pair"),
-                settings=settings, creative_id=creative_id,
-            )
-            # 漏网补洞：新 creative 的三路召回局部扫描（文本带外的对也覆盖）
-            if settings is not None:
-                from app.services.missed_merge_scan import scan_missed_merges
+        # 自动路径必须读类别闸：刹车踩下后该类别不再自动执行。
+        # 与 CLI 同口径——judge_auto_allowed = 总闸 AND 类别闸
+        run_dna_assignments(
+            db, config, dry_run=False,
+            auto_enabled=judge_auto_allowed(db, "dna_assign"),
+            creative_id=creative_id,
+        )
+    except Exception:  # noqa: BLE001 — 单阶段失败不波及其他阶段
+        logger.exception("post-analysis 归族阶段失败 creative=%s", creative_id)
+    try:
+        run_merge_judgements(
+            db, config, dry_run=False,
+            auto_enabled=judge_auto_allowed(db, "merge_pair"),
+            settings=settings, creative_id=creative_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("post-analysis 合并预裁阶段失败 creative=%s", creative_id)
+    if settings is None:
+        return
+    # 漏网补洞：新 creative 的四路召回局部扫描（文本带外的对也覆盖）
+    try:
+        from app.services.missed_merge_scan import scan_missed_merges
 
-                scan_missed_merges(
-                    db, settings, config, creative_id=creative_id,
-                    emit=lambda _msg: None,
-                )
-                # 周期性巩固：距上次全扫 ≥7 天或新增 ≥50 条 → 全量扫描+校准
-                from app.services.consolidation import maybe_consolidate
+        scan_missed_merges(
+            db, settings, config, creative_id=creative_id,
+            emit=lambda _msg: None, commit=True,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("post-analysis 漏网扫描失败 creative=%s", creative_id)
+    # 周期性巩固：距上次全扫 ≥7 天或新增 ≥50 条 → 全量扫描+校准
+    # （自带容错与短事务，不重复包裹）
+    from app.services.consolidation import maybe_consolidate
 
-                maybe_consolidate(db, settings, config)
+    maybe_consolidate(db, settings, config)
+    # 市场前缀引导：新用户上传即发现命名约定（只建议不配置）
+    try:
+        from app.services.market_detect import suggest_detected_prefixes
 
-                # 市场前缀引导：新用户上传即发现命名约定（只建议不配置）
-                from app.services.market_detect import suggest_detected_prefixes
-
-                suggest_detected_prefixes(db)
+        suggest_detected_prefixes(db)
         db.commit()
-    except Exception:  # noqa: BLE001 — 判定失败不拖垮分析管线
-        # begin_nested 已把失败回滚限定在判定工作内，这里只记日志；
-        # 不再 db.rollback()——共享 session 场景下会误伤调用方既有状态
-        logger.exception("post-analysis judge 失败 creative=%s", creative_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("post-analysis 市场前缀检测失败 creative=%s", creative_id)

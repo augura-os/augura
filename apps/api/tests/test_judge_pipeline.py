@@ -518,3 +518,101 @@ class TestReanalysisMoveRecompute:
             )
         ).one()
         assert moved.creative_id != old.id
+
+
+class TestPerItemCommit:
+    """F3 条目级短事务：LLM 调用不跨未提交写——每条 creative 的写入
+    立即提交；单条 LLM 失败回滚本条、不丢后续条目的写入。"""
+
+    @staticmethod
+    def _spy_commits(monkeypatch) -> list[int]:  # noqa: ANN001
+        calls: list[int] = []
+        real_commit = Session.commit
+
+        def _spy(self) -> None:  # noqa: ANN001
+            calls.append(1)
+            real_commit(self)
+
+        monkeypatch.setattr(Session, "commit", _spy)
+        return calls
+
+    def test_dna_assignments_commit_per_item_and_contain_failure(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        dna = CreativeDNA(id=str(uuid.uuid4()), code="D1", name="测试家族")
+        db_session.add(dna)
+        bad = _creative_with_analysis(
+            db_session, name="c-bad", filename="KS_EN-bad.mp4"
+        )
+        good = _creative_with_analysis(
+            db_session, name="c-good", filename="KS_EN-good.mp4"
+        )
+        db_session.commit()  # 夹具落库：条目级 rollback 不会误伤夹具数据
+
+        def _suggest(creative, hook, gameplay, db, config):  # noqa: ANN001, ANN202
+            if creative.name == "c-bad":
+                raise RuntimeError("LLM 炸了")
+            return DnaSuggestion(dna=dna, votes=3, reason="规则命中")
+
+        monkeypatch.setattr(judge_pipeline, "suggest_dna", _suggest)
+        commits = self._spy_commits(monkeypatch)
+        judge_pipeline.run_dna_assignments(
+            db_session, _fake_config(), dry_run=False, auto_enabled=True,
+        )
+        assert commits == [1]  # 只有 good 条目提交（bad 条目回滚）
+        db_session.expire_all()
+        assert db_session.get(Creative, good.id).dna_id == dna.id
+        assert db_session.get(Creative, bad.id).dna_id is None
+
+    def test_stage_failure_does_not_skip_next_stage(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        """F3 阶段级容错：归族阶段炸了，合并预裁阶段照样执行（不再共用
+        一个大 begin_nested 同生共死）。"""
+        creative = _creative_with_analysis(
+            db_session, name="c-stage", filename="KS_EN-stage.mp4"
+        )
+
+        def _boom(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            raise RuntimeError("归族阶段炸了")
+
+        called: list[bool] = []
+        monkeypatch.setattr(judge_pipeline, "run_dna_assignments", _boom)
+        monkeypatch.setattr(
+            judge_pipeline, "run_merge_judgements",
+            lambda *a, **k: called.append(True),  # noqa: ANN002, ANN003
+        )
+        judge_pipeline.run_post_analysis(db_session, _fake_config(), creative.id)
+        assert called == [True]
+        assert db_session.get(Creative, creative.id) is not None
+
+
+class TestJudgePhaseSlots:
+    """F3 双槽模型：判定阶段在 _PIPELINE_SLOTS 释放之后才运行——判定
+    挂起只占判定槽，不再堵死分析通道。"""
+
+    def test_judge_runs_after_pipeline_slot_release(
+        self, db_session: Session, pipeline_mocks: None, monkeypatch
+    ) -> None:
+        from app.services import pipeline
+        from app.services.pipeline import run_analysis_pipeline
+
+        events: list[str] = []
+
+        class _SpySlots:
+            def __enter__(self):  # noqa: ANN202
+                events.append("pipeline-acquire")
+                return self
+
+            def __exit__(self, *_exc) -> bool:  # noqa: ANN002, ANN202
+                events.append("pipeline-release")
+                return False
+
+        monkeypatch.setattr(pipeline, "_PIPELINE_SLOTS", _SpySlots())
+        monkeypatch.setattr(
+            judge_pipeline, "run_post_analysis",
+            lambda *a, **k: events.append("judge"),  # noqa: ANN002, ANN003
+        )
+        asset = _seed_pending_asset(db_session)
+        run_analysis_pipeline(asset.id)
+        assert events == ["pipeline-acquire", "pipeline-release", "judge"]

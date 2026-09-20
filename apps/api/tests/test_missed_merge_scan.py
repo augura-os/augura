@@ -501,3 +501,65 @@ class TestMergeRecomputesRepresentative:
         # 按成员重算（非增量）：[1,0] 与 [0,1] 的均值
         assert target.representative_embedding == [0.5, 0.5]
         assert target.embedding_count == 2
+
+
+class TestScanCommitContract:
+    """F3 对级短事务：commit=True 每对判定写完立即提交（LLM 调用不跨
+    未提交写）；commit=False 保持 F2 契约——零提交，事务边界归调用方。"""
+
+    @staticmethod
+    def _spy_commits(monkeypatch) -> list[int]:  # noqa: ANN001
+        calls: list[int] = []
+        real_commit = Session.commit
+
+        def _spy(self) -> None:  # noqa: ANN001
+            calls.append(1)
+            real_commit(self)
+
+        monkeypatch.setattr(Session, "commit", _spy)
+        return calls
+
+    def _seed_two_pairs(self, db_session: Session) -> None:
+        # 两对文本带内召回（名字 3/5 token 交集 → 文本分 0.25 带内）
+        _creative(db_session, "alpha-beta-gamma-delta-epsilon")
+        _creative(db_session, "alpha-beta-x1-x2-x3")
+        _creative(db_session, "gamma-one-two-three-four")
+        _creative(db_session, "gamma-one-x7-x8-x9")
+
+    def _patch_judge_split(self, monkeypatch) -> None:  # noqa: ANN001
+        monkeypatch.setattr(
+            missed_merge_scan, "judge_pair",
+            lambda config, *, analysis_a, analysis_b: MergeJudgement(
+                same_creative=False, votes=2, reason="不同创意",
+            ),
+        )
+
+    def test_commit_true_commits_per_pair(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        self._seed_two_pairs(db_session)
+        self._patch_judge_split(monkeypatch)
+        commits = self._spy_commits(monkeypatch)
+        stats = scan_missed_merges(
+            db_session, Settings(), None, emit=lambda _m: None, commit=True,
+        )
+        assert stats.suggested == 2
+        # 每对一次 + 收尾一次（孤儿清理等零散写入）
+        assert len(commits) == 3
+
+    def test_commit_false_never_commits(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        self._seed_two_pairs(db_session)
+        self._patch_judge_split(monkeypatch)
+        commits = self._spy_commits(monkeypatch)
+        stats = scan_missed_merges(
+            db_session, Settings(), None, emit=lambda _m: None, commit=False,
+        )
+        assert stats.suggested == 2
+        assert commits == []
+        # 写入在会话内已生效（提交留给调用方）
+        rows = db_session.scalars(
+            select(JudgeSuggestion).where(JudgeSuggestion.kind == "merge_pair")
+        ).all()
+        assert len(rows) == 2

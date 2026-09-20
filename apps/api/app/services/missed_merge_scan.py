@@ -347,12 +347,16 @@ def scan_missed_merges(
     dry_run: bool = False,
     recall_only: bool = False,
     emit: Callable[[str], None] = print,
+    commit: bool = False,
 ) -> ScanStats:
     """扫描主流程：召回 → 判定 → 出件（自动合并或收件箱建议）。
 
-    不写 commit——事务边界归调用方（脚本末尾统一 commit；
-    run_post_analysis 的 begin_nested 里由外层提交）。dry_run 只打印；
-    recall_only 连 LLM 判定都跳过（纯召回体检）。
+    事务边界（F3 纪律：LLM 调用绝不跨未提交写）：commit=True 时每对
+    判定写完（建议 upsert / 自动合并 + 建议清理）立即提交，收尾再统一
+    提交一次（覆盖孤儿清理等零散写入）——上传管线与周期巩固走这条；
+    commit=False（默认）不写 commit，事务边界归调用方（批量脚本末尾
+    统一 commit）。dry_run 只打印；recall_only 连 LLM 判定都跳过
+    （纯召回体检）。
     """
     stats = ScanStats()
     stats.orphans_cleaned = 0 if dry_run else cleanup_orphan_merge_suggestions(db)
@@ -400,6 +404,8 @@ def scan_missed_merges(
                     reason=f"{judgement.reason}（{pair.evidence}）",
                 )
                 stats.suggested += 1
+                if commit:
+                    db.commit()  # 对级短事务：下一对的 LLM 不跨本对未提交写
             continue
         stats.judged_merge += 1
         alignment = None
@@ -432,6 +438,8 @@ def scan_missed_merges(
                     left_id=pair.right.id, right_id=pair.left.id,
                 )
                 emit(f"       判定: 自动合并（对齐 {alignment:.0%}）")
+                if commit:
+                    db.commit()  # 对级短事务：合并结果立即落库释放行锁
                 continue
         if not dry_run:
             upsert_suggestion(
@@ -441,7 +449,11 @@ def scan_missed_merges(
                 reason=f"{judgement.reason}（{pair.evidence}）",
             )
             stats.suggested += 1
+            if commit:
+                db.commit()  # 对级短事务：同上
         emit(f"       判定: merge ({judgement.votes}/3) → 建议")
+    if commit:
+        db.commit()  # 收尾：孤儿清理等零散写入（零召回对时也要落库）
     return stats
 
 
@@ -450,15 +462,15 @@ def scan_for_creative(
 ) -> None:
     """局部重扫入口（合并后传递闭包 / 上传管线）：只扫该 creative vs 全部。
 
-    自行 resolve AI 配置；失败静默。commit=False 时把提交留给调用方
-    （merge_creatives(commit=False) 跑在调用方的事务边界里）。
+    自行 resolve AI 配置；失败静默。commit 穿透给 scan_missed_merges：
+    commit=True 对级短事务提交（默认）；commit=False 把提交留给调用方
+    （merge_creatives(commit=False) 跑在调用方的事务边界里，F2 契约）。
     """
     config = resolve_ai_config(db, settings)
     stats = scan_missed_merges(
-        db, settings, config, creative_id=creative_id, emit=lambda _msg: None
+        db, settings, config, creative_id=creative_id,
+        emit=lambda _msg: None, commit=commit,
     )
-    if commit:
-        db.commit()
     logger.info(
         "局部重扫 creative=%s: 召回 %d，合并 %d，建议 %d",
         creative_id, stats.recalled, stats.merged, stats.suggested,

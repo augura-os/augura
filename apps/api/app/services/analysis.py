@@ -66,10 +66,16 @@ _SYSTEM_PROMPT = ip_pack.ANALYSIS_SYSTEM_PROMPT
 _USER_PROMPT_VIDEO = ip_pack.ANALYSIS_USER_PROMPT_VIDEO
 _USER_PROMPT_IMAGE = ip_pack.ANALYSIS_USER_PROMPT_IMAGE
 
+# strict 分支温度兼容性记忆（同 llm_judge._TEMPERATURE_REJECTED 的思路）：
+# 端点支持 json_schema 但只允许固定温度时，记住 (base_url, model)，
+# 后续 strict 调用直接不带 temperature，不再每次白付一次 400。
+_STRICT_TEMPERATURE_REJECTED: set[tuple[str, str]] = set()
+
 
 class AnalysisService:
     def __init__(self, config: AIConfig) -> None:
         self._client = OpenAI(api_key=config.api_key, base_url=config.base_url)
+        self._base_url = config.base_url
         self._vision_model = config.vision_model
         self._embedding_model = config.embedding_model
         self._json_mode_only = config.is_moonshot
@@ -115,20 +121,40 @@ class AnalysisService:
     def _complete(self, messages: list[dict[str, object]]) -> str:
         """Strict json_schema when supported; JSON Mode otherwise (+retry)."""
         if not self._json_mode_only:
-            try:
-                completion = self._client.chat.completions.create(
-                    model=self._vision_model,
-                    messages=messages,  # type: ignore[arg-type]
-                    response_format={  # type: ignore[typeddict-item]
-                        "type": "json_schema",
-                        "json_schema": ANALYSIS_JSON_SCHEMA,
-                    },
-                    temperature=0.2,
-                    max_tokens=2000,
-                )
-                return completion.choices[0].message.content or "{}"
-            except BadRequestError:
-                pass  # provider rejected strict mode → JSON Mode below
+            strict_kwargs: dict[str, object] = {
+                "model": self._vision_model,
+                "messages": messages,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": ANALYSIS_JSON_SCHEMA,
+                },
+                "max_tokens": 2000,
+            }
+            endpoint_key = (self._base_url, self._vision_model)
+            if endpoint_key not in _STRICT_TEMPERATURE_REJECTED:
+                strict_kwargs["temperature"] = 0.2
+            for attempt in range(2):
+                try:
+                    completion = self._client.chat.completions.create(
+                        **strict_kwargs  # type: ignore[arg-type, typeddict-item]
+                    )
+                    return completion.choices[0].message.content or "{}"
+                except BadRequestError as exc:
+                    # 端点支持 strict schema 但只允许固定温度：记住该端点，
+                    # 不带温度重试 strict（保住 json_schema 约束）。其它 400
+                    # （如不支持 strict）落 JSON Mode。
+                    if (
+                        attempt == 0
+                        and "temperature" in strict_kwargs
+                        and "temperature" in str(exc).lower()
+                    ):
+                        strict_kwargs.pop("temperature")
+                        _STRICT_TEMPERATURE_REJECTED.add(endpoint_key)
+                        logger.info(
+                            "端点拒绝显式 temperature，strict 重试不带并记忆: %s", exc
+                        )
+                        continue
+                    break  # provider rejected strict mode → JSON Mode below
         completion = self._client.chat.completions.create(
             model=self._vision_model,
             messages=messages,  # type: ignore[arg-type]

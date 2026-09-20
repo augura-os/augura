@@ -293,16 +293,43 @@ def _cluster(
 
 # 分析并发上限：批量上传 = 每文件一个后台任务，每个 pipeline 在整个 LLM
 # 调用期间持有一个 DB session，不封顶会把连接池打爆（QueuePool timeout）。
+# F3 双槽模型：本槽只覆盖分析核心（_run_analysis_pipeline：抽帧/LLM/嵌入/
+# 聚类 + completed 落库 + 紧随的重算/图同步/镜像重建）；判定阶段在槽释放后
+# 运行，用 judge_pipeline._JUDGE_SLOTS 独立限流——判定挂起不再堵死分析通道
+# （事故时判定共槽，LLM 卡住 → 槽不释放 → 37 个上传任务占满线程池，全站挂起）
 _PIPELINE_SLOTS = threading.Semaphore(get_settings().analysis_concurrency)
 
 
 def run_analysis_pipeline(asset_id: str) -> None:
-    """并发闸门：超出 analysis_concurrency 的任务在此排队（线程阻塞）。"""
+    """并发闸门：分析核心在 _PIPELINE_SLOTS 下运行；判定阶段槽外独立限流。"""
     with _PIPELINE_SLOTS:
-        _run_analysis_pipeline(asset_id)
+        creative_id = _run_analysis_pipeline(asset_id)
+    if creative_id is not None:
+        _run_judge_phase(creative_id)
 
 
-def _run_analysis_pipeline(asset_id: str) -> None:
+def _run_judge_phase(creative_id: str) -> None:
+    """判定阶段（归族 + 合并预裁 + 漏网扫描 + 巩固）：分析槽外、判定槽内。
+
+    独立 session（照 run_analysis_pipeline 模式）；run_post_analysis 内部
+    已全程容错，外层 try 只是兜底——判定失败绝不翻转已提交的 completed。
+    """
+    from app.services.judge_pipeline import _JUDGE_SLOTS, run_post_analysis
+
+    with _JUDGE_SLOTS:
+        settings = get_settings()
+        db = SessionLocal()
+        try:
+            config = resolve_ai_config(db, settings)
+            run_post_analysis(db, config, creative_id, settings=settings)
+        except Exception:  # noqa: BLE001 — 判定失败不拖垮上传后台任务
+            logger.exception("判定阶段失败 creative=%s", creative_id)
+        finally:
+            db.close()
+
+
+def _run_analysis_pipeline(asset_id: str) -> str | None:
+    """分析核心；成功返回 creative.id（供判定阶段用），失败/跳过返回 None。"""
     settings = get_settings()
     storage = StorageService(settings)
     db = SessionLocal()
@@ -311,7 +338,7 @@ def _run_analysis_pipeline(asset_id: str) -> None:
         asset_repo = AssetRepository(db)
         asset = asset_repo.get(asset_id)
         if asset is None or asset.file_type not in ("video", "image"):
-            return
+            return None
 
         asset_repo.set_status(asset, "processing", "")
         db.commit()
@@ -325,7 +352,7 @@ def _run_analysis_pipeline(asset_id: str) -> None:
                 "（支持 OpenAI / Kimi 等 OpenAI 兼容接口），"
                 "或设置环境变量 OPENAI_API_KEY 后重试",
             )
-            return
+            return None
 
         tmp_dir.mkdir(parents=True, exist_ok=True)
         frames = _collect_frames(settings, storage, asset, tmp_dir)
@@ -387,12 +414,10 @@ def _run_analysis_pipeline(asset_id: str) -> None:
                 tags=tags,
             )
         rebuild_mirror(db)
-
-        # 分析完成后自动判定：归族 + 涉及本 creative 的合并预裁（仅建议/
-        # 自动级辅助；内部容错，失败不影响上面的 completed 状态）
-        from app.services.judge_pipeline import run_post_analysis
-
-        run_post_analysis(db, config, creative.id, settings=settings)
+        # 判定（归族/合并预裁/漏网扫描/巩固）不在这里跑——由
+        # run_analysis_pipeline 在分析槽释放后调 _run_judge_phase（F3
+        # 双槽模型），本函数只负责把 creative.id 交出去
+        return creative.id
     except Exception as exc:  # noqa: BLE001 — status must become "failed"
         logger.exception("分析流水线失败 asset=%s", asset_id)
         # 404 url.not_found 几乎都是 Base URL 漏了 /v1，给用户可直接行动的提示

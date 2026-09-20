@@ -23,6 +23,12 @@ requires_ip_pack = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_temperature_memory() -> None:
+    """端点温度兼容记忆是进程级状态，用例间必须隔离。"""
+    llm_judge._TEMPERATURE_REJECTED.clear()
+
+
 class _FakeConfig(AIConfig):
     def __init__(self) -> None:
         super().__init__(api_key="", base_url="", vision_model="", embedding_model="")
@@ -242,3 +248,47 @@ class TestTemperatureFallback:
             api_key="k", base_url="", vision_model="m", embedding_model=""
         )
         assert llm_judge.complete_json(config, system="", user="") is None
+
+    def test_rejection_remembered_skips_temperature_next_time(
+        self, monkeypatch
+    ) -> None:
+        """第一次 400 拒绝后记住 (base_url, model)：后续调用直接不带
+        temperature，不再白付 400。"""
+        calls = self._patch_openai(
+            monkeypatch,
+            [self._bad_request("invalid temperature: only 1 is allowed")],
+        )
+        config = AIConfig(
+            api_key="k", base_url="https://api.kimi.com/coding/v1",
+            vision_model="k3-256k", embedding_model="",
+        )
+        assert llm_judge.complete_json(config, system="", user="") == {"ok": True}
+        assert len(calls) == 2  # 400 + 不带温度重试
+        assert ("https://api.kimi.com/coding/v1", "k3-256k") in (
+            llm_judge._TEMPERATURE_REJECTED
+        )
+        # 第二次调用：只发 1 次请求，且根本不带 temperature
+        assert llm_judge.complete_json(config, system="", user="") == {"ok": True}
+        assert len(calls) == 3
+        assert "temperature" not in calls[2]
+
+    def test_model_switch_reprobes(self, monkeypatch) -> None:  # noqa: ANN001
+        """真实用户会切模型：记忆按 (base_url, model) 做 key，换新模型后
+        重新探测（第一次仍带 temperature）。"""
+        calls = self._patch_openai(
+            monkeypatch,
+            [self._bad_request("invalid temperature: only 1 is allowed")],
+        )
+        config = AIConfig(
+            api_key="k", base_url="https://api.kimi.com/coding/v1",
+            vision_model="k3-256k", embedding_model="",
+        )
+        llm_judge.complete_json(config, system="", user="")
+        switched = AIConfig(
+            api_key="k", base_url="https://api.kimi.com/coding/v1",
+            vision_model="k2.5", embedding_model="",
+        )
+        assert llm_judge.complete_json(switched, system="", user="") == {"ok": True}
+        assert len(calls) == 3
+        assert calls[2]["model"] == "k2.5"
+        assert "temperature" in calls[2]  # 新 key 重新探测，仍带温度

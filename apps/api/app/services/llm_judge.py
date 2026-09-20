@@ -20,6 +20,12 @@ from app.services.settings import AIConfig
 
 logger = logging.getLogger(__name__)
 
+# 端点温度兼容性记忆：某 (base_url, model) 第一次 400 拒绝显式
+# temperature 后记住它，后续调用直接不带（真实用户会切换模型/端点，
+# 按 (base_url, model) 做 key，切换后自动重新探测；进程重启即失效，
+# 无持久化负担）。
+_TEMPERATURE_REJECTED: set[tuple[str, str]] = set()
+
 
 def _client(config: AIConfig) -> OpenAI:
     return OpenAI(api_key=config.api_key, base_url=config.base_url)
@@ -36,7 +42,8 @@ def complete_json(
     """One JSON-mode completion; None on any failure (静默降级).
 
     temperature 显式透传（None 时用 config.judge_temperature）——不传时
-    服务商默认值可能是 0，自洽投票的三次采样会退化为同一票。
+    服务商默认值可能是 0，自洽投票的三次采样会退化为同一票。例外：
+    端点已记忆为拒绝显式温度（_TEMPERATURE_REJECTED）时直接不带。
     """
     kwargs: dict[str, Any] = {
         "model": config.vision_model,
@@ -46,10 +53,12 @@ def complete_json(
         ],
         "response_format": {"type": "json_object"},
         "max_tokens": max_tokens,
-        "temperature": (
-            temperature if temperature is not None else config.judge_temperature
-        ),
     }
+    endpoint_key = (config.base_url, config.vision_model)
+    if endpoint_key not in _TEMPERATURE_REJECTED:
+        kwargs["temperature"] = (
+            temperature if temperature is not None else config.judge_temperature
+        )
     for attempt in range(2):
         try:
             completion = _client(config).chat.completions.create(**kwargs)
@@ -58,10 +67,18 @@ def complete_json(
         except BadRequestError as exc:
             # 部分端点只允许固定温度（如 Kimi k3 仅允许 1），显式传值会
             # 400——被拒时不带温度重试，走服务商默认（k3 恒为 1，自洽
-            # 投票的采样多样性仍在）。其它 400 不重试。
-            if attempt == 0 and "temperature" in str(exc).lower():
-                kwargs.pop("temperature", None)
-                logger.info("端点拒绝显式 temperature，改用服务商默认值重试: %s", exc)
+            # 投票的采样多样性仍在），并记住该端点后续不再传。其它 400
+            # 不重试。
+            if (
+                attempt == 0
+                and "temperature" in kwargs
+                and "temperature" in str(exc).lower()
+            ):
+                kwargs.pop("temperature")
+                _TEMPERATURE_REJECTED.add(endpoint_key)
+                logger.info(
+                    "端点拒绝显式 temperature，改用服务商默认值重试并记忆: %s", exc
+                )
                 continue
             logger.debug("llm judge completion failed: %s", exc)
             return None

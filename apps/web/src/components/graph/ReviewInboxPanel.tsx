@@ -114,6 +114,7 @@ function MergeActions({ item }: { item: ReviewItem }) {
   const queryClient = useQueryClient();
   const { armed, arm } = useConfirm();
   const [done, setDone] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [blockMessage, setBlockMessage] = useState<string | null>(null);
   const [forceReason, setForceReason] = useState("");
   const [pendingBody, setPendingBody] = useState<{
@@ -131,18 +132,30 @@ function MergeActions({ item }: { item: ReviewItem }) {
       target_creative_id: string;
       force_reason?: string;
     }) => mergeCreatives(body),
+    // 乐观更新：点击即出"并入中"徽章（队列重算要几秒，等它再显示会让用户
+    // 以为没点上）；任何失败都回滚徽章重新露出按钮——与 similarMutation 同款。
+    onMutate: () => {
+      setDone(t("inbox.merge.merging"));
+      setErrorMessage(null);
+    },
     onSuccess: () => {
       setDone(t("inbox.merge.merged"));
       setBlockMessage(null);
       invalidate();
     },
     onError: (error, body) => {
+      setDone(null);
       const message = error instanceof Error ? error.message : "";
       // 守卫拦截的消息由后端返回且仍为中文，这里按原文匹配。
       // 后端消息翻译为英文时，此判断必须同步改为错误码——详见 PR 说明。
       if (message.includes("守卫拦截")) {
         setBlockMessage(message);
         setPendingBody(body);
+      } else {
+        // 超时/500/网络错误以前被静默吞掉（卡片原地不动像"卡住"）——
+        // 必须露出错误让用户知道要重试。注意：超时场景后端可能实际已
+        // 合并成功，队列轮询（15s）会把已处理的卡片自动撤下。
+        setErrorMessage(message || t("common.failedRetry"));
       }
     },
   });
@@ -263,6 +276,11 @@ function MergeActions({ item }: { item: ReviewItem }) {
         {t("inbox.merge.notTheSame")}
       </button>
       </span>
+      {errorMessage ? (
+        <span className="mt-1 block text-[11px] text-red-500">
+          {t("inbox.merge.failed")}：{errorMessage}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -1004,6 +1022,11 @@ export function ReviewInboxPanel({
               : t("inbox.family.suggest")}
           </button>
         </div>
+      ) : null}
+      {bootstrapMutation.isPending ? (
+        <p className="px-5 pb-2 text-[11px] leading-snug text-neutral-400">
+          {t("inbox.family.pendingHint")}
+        </p>
       ) : null}
       {bootstrapHint ? (
         <p className="px-5 pb-2 text-[11px] leading-snug text-neutral-400">

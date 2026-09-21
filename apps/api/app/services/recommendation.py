@@ -83,6 +83,8 @@ class CreativeMetrics:
     # 可选判定指标（消耗加权；judge_metrics 开启后参与判定）
     d3_roas: float | None = None
     d1_retention: float | None = None
+    # 总曝光（数据充分性闸门用；行级 impressions 列求和）
+    impressions: int = 0
 
 
 def collect_creative_performance(
@@ -165,6 +167,7 @@ def aggregate(
 ) -> CreativeMetrics:
     spend = sum(row.spend for row in rows)
     installs = sum(row.installs for row in rows)
+    impressions = sum(row.impressions for row in rows)
     payers = 0
     for row in rows:
         value = metrics_from_raw(row.raw or {})["payers"]
@@ -193,6 +196,7 @@ def aggregate(
         spend=spend,
         payers=payers,
         installs=installs,
+        impressions=impressions,
         cpp=cpp,
         roas=_weighted_metric(rows, "d1_roas"),
         cpi=spend / installs if installs else None,
@@ -216,7 +220,10 @@ def recommend(
     metrics: CreativeMetrics,
     config: MetricConfig | None = None,
 ) -> tuple[RecommendationAction, list[str]]:
-    """Classify a creative; the first matching rule wins (R1→R9).
+    """Classify a creative; the first matching rule wins (R0→R9).
+
+    R0 is the data-sufficiency gate (spend + impressions both below the
+    signal lines → observation period, no directional verdict).
 
     Thresholds and the participating metrics come from ``config`` (Settings
     页配置）；未传时用默认值——与未配置的旧行为完全一致。``judge_metrics``
@@ -234,6 +241,17 @@ def recommend(
 
     if m.spend == 0:
         return "ITERATE", ["尚未投放或未匹配到投放数据，建议投放验证"]
+    # R0 数据充分性闸门：消耗与曝光双低 = 小样本，不下方向性结论
+    # （任一信号达标即放行，进入正常规则链）
+    if (
+        m.spend < t["spend_min_signal"]
+        and m.impressions < t["impressions_min_signal"]
+    ):
+        return "ITERATE", [
+            f"观察期：数据不足（消耗 {spend_s} 未达 ${t['spend_min_signal']:,.0f} "
+            f"且曝光 {m.impressions:,} 未达 {int(t['impressions_min_signal']):,}），"
+            "继续投放积累数据后再判定"
+        ]
     if (
         m.days_idle is not None
         and m.days_idle > IDLE_DAYS_ARCHIVE

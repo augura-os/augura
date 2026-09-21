@@ -28,6 +28,8 @@ export const en: Record<string, string> = {
   "threshold.roas_weak_line": "D1 ROAS weak line",
   "threshold.d3_roas_weak_line": "D3 ROAS weak line",
   "threshold.d1_retention_weak_line": "D1 retention weak line (0.35 = 35%)",
+  "threshold.spend_min_signal": "Observation-period min spend ($)",
+  "threshold.impressions_min_signal": "Observation-period min impressions",
 
   "factor.intro-sticker": "Intro sticker",
   "factor.language-market": "Language / market",

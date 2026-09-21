@@ -25,6 +25,7 @@ def _metrics(**overrides: object) -> object:
         spend=1000.0,
         payers=20,
         installs=500,
+        impressions=10000,
         cpp=50.0,
         roas=0.03,
         cpi=2.0,
@@ -131,6 +132,43 @@ class TestRecommendRules:
         _, reasons = recommend(_metrics(cpp=41.76, spend=752.0))
         assert "41.76" in reasons[0]
         assert "752" in reasons[0]
+
+
+class TestDataSufficiencyGate:
+    """R0 数据充分性闸门：消耗与曝光双低 → 观察期，不下方向性结论。"""
+
+    def test_low_spend_low_impressions_observation(self) -> None:
+        # 线上真实案例：消耗 $3.91 / 0 付费 / 低曝光，原链会落到 "成本 - 健康"
+        action, reasons = recommend(
+            _metrics(spend=3.91, payers=0, cpp=None, roas=0.0, impressions=833)
+        )
+        assert action == "ITERATE"
+        assert "数据不足" in reasons[0]
+        assert "健康" not in reasons[0]
+
+    def test_spend_at_signal_line_enters_normal_chain(self) -> None:
+        # 消耗达标（≥$10 且 ≥$50 暂停线）→ 原 R3 0 付费暂停链不受影响
+        action, reasons = recommend(
+            _metrics(spend=60.0, payers=0, cpp=None, impressions=100)
+        )
+        assert action == "PAUSE"
+        assert "0 付费" in reasons[0]
+
+    def test_impressions_alone_sufficient(self) -> None:
+        # 曝光达标但消耗不足 → 不进观察期，走正常规则链
+        action, reasons = recommend(
+            _metrics(spend=5.0, payers=0, cpp=None, roas=0.0, impressions=6000)
+        )
+        assert action == "ITERATE"
+        assert "数据不足" not in reasons[0]
+        assert "Roas" in reasons[0]
+
+    def test_observation_reason_carries_numbers(self) -> None:
+        _, reasons = recommend(
+            _metrics(spend=3.91, payers=0, cpp=None, roas=0.0, impressions=833)
+        )
+        assert "833" in reasons[0]
+        assert "$10" in reasons[0]
 
 
 class TestMetricConfigGating:

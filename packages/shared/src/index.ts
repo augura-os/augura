@@ -210,6 +210,9 @@ export interface ReviewItem {
   asset_id: string | null;
   related_creative_id: string | null;
   related_creative_name: string | null;
+  /** 合并候选素材预览（kind="merge_candidate" 时携带；左右各首个变体的素材） */
+  preview_asset_id: string | null;
+  related_preview_asset_id: string | null;
   derivation_id: string | null;
   /** 短名展示：市场标签 + 文件名尾部区分段（裂变待判定） */
   source_label: string | null;

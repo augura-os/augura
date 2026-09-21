@@ -228,6 +228,12 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
     }
     prefixes = markets.resolve_market_prefixes(db)
     generic_tokens = markets.resolve_generic_tokens(db)
+    # 合并卡片素材预览：每个 creative 取最早变体的素材 id（缩略图/播放用）
+    first_preview_asset: dict[str, str] = {}
+    for variant in db.scalars(
+        select(CreativeVariant).order_by(CreativeVariant.created_at)
+    ).all():
+        first_preview_asset.setdefault(variant.creative_id, variant.asset_id)
 
     # Heuristic 1: same filename modulo market prefix in different creatives.
     stmt = (
@@ -268,6 +274,8 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
                 creative_name=first_creative.name,
                 related_creative_id=other_id,
                 related_creative_name=other_name,
+                preview_asset_id=first_preview_asset.get(first_creative.id),
+                related_preview_asset_id=first_preview_asset.get(other_id),
             )
         )
 
@@ -322,6 +330,8 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
                 creative_name=left.name,
                 related_creative_id=right.id,
                 related_creative_name=right.name,
+                preview_asset_id=first_preview_asset.get(left.id),
+                related_preview_asset_id=first_preview_asset.get(right.id),
                 suggestion=suggestion.verdict if suggestion else None,
                 suggestion_votes=suggestion.votes if suggestion else None,
                 suggestion_reason=suggestion.reason if suggestion else None,
@@ -352,6 +362,8 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
                 creative_name=left.name,
                 related_creative_id=right.id,
                 related_creative_name=right.name,
+                preview_asset_id=first_preview_asset.get(left.id),
+                related_preview_asset_id=first_preview_asset.get(right.id),
                 suggestion=suggestion.verdict,
                 suggestion_votes=suggestion.votes,
                 suggestion_reason=suggestion.reason,

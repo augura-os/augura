@@ -163,6 +163,8 @@ export const en: Record<string, string> = {
   "inbox.merge.notTheSameTitle":
     "Register as an observation pair: keep them apart and decide once there is more data",
   "inbox.merge.keepSplitReason": "Human confirmed: keep split (review inbox)",
+  "inbox.merge.previewTitle": "Preview: {name}",
+  "inbox.merge.closePreview": "Close preview",
   "inbox.verdict.done": "Verdicted {verdict}",
   "inbox.verdict.donePositive": "positive",
   "inbox.verdict.doneNegative": "negative",

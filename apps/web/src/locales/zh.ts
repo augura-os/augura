@@ -159,6 +159,8 @@ export const zh: Record<string, string> = {
   "inbox.merge.notTheSame": "不是同一条",
   "inbox.merge.notTheSameTitle": "登记为观察对：先拆开，等数据多了再判断是否同一条",
   "inbox.merge.keepSplitReason": "人工确认维持拆分（收件箱）",
+  "inbox.merge.previewTitle": "预览：{name}",
+  "inbox.merge.closePreview": "关闭预览",
   "inbox.verdict.done": "已判定{verdict}",
   "inbox.verdict.donePositive": "有效",
   "inbox.verdict.doneNegative": "无效",

@@ -117,6 +117,9 @@ function MergeActions({ item }: { item: ReviewItem }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [blockMessage, setBlockMessage] = useState<string | null>(null);
   const [forceReason, setForceReason] = useState("");
+  // 素材预览弹层：imageFallback=true 时改用 <img>（图片素材走不通 <video>）
+  const [preview, setPreview] = useState<{ id: string; name: string } | null>(null);
+  const [previewImageFallback, setPreviewImageFallback] = useState(false);
   const [pendingBody, setPendingBody] = useState<{
     source_creative_id: string;
     target_creative_id: string;
@@ -223,6 +226,34 @@ function MergeActions({ item }: { item: ReviewItem }) {
       <span className="mb-1 block text-[10px] leading-snug text-neutral-400">
         {t("inbox.merge.hint")}
       </span>
+      {item.preview_asset_id || item.related_preview_asset_id ? (
+        // 裁决前先看到素材内容：左右缩略图与"并入左/右"方位一致，点击播放
+        <span className="mb-1 flex gap-1">
+          {[
+            { id: item.preview_asset_id, name: left },
+            { id: item.related_preview_asset_id, name: right },
+          ].map((side) =>
+            side.id ? (
+              <button
+                key={side.id}
+                title={t("inbox.merge.previewTitle").replace("{name}", side.name)}
+                onClick={() => {
+                  setPreviewImageFallback(false);
+                  setPreview({ id: side.id!, name: side.name });
+                }}
+                className="h-16 w-28 shrink-0 overflow-hidden rounded-md border border-neutral-200 bg-neutral-100 transition hover:border-neutral-400"
+              >
+                <img
+                  src={`/assets/${side.id}/media?variant=thumb`}
+                  alt={side.name}
+                  loading="lazy"
+                  className="h-full w-full object-cover"
+                />
+              </button>
+            ) : null,
+          )}
+        </span>
+      ) : null}
       <span className="flex items-center gap-1">
       {item.suggestion ? (
         <span
@@ -279,6 +310,44 @@ function MergeActions({ item }: { item: ReviewItem }) {
       {errorMessage ? (
         <span className="mt-1 block text-[11px] text-red-500">
           {t("inbox.merge.failed")}：{errorMessage}
+        </span>
+      ) : null}
+      {preview ? (
+        // 预览弹层：视频默认 <video> 播放，图片素材加载失败时回退 <img>
+        <span
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreview(null)}
+        >
+          <span
+            className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-xl bg-black"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="flex items-center justify-between gap-2 bg-neutral-900 px-3 py-1.5">
+              <span className="truncate text-xs text-neutral-300">{preview.name}</span>
+              <button
+                title={t("inbox.merge.closePreview")}
+                onClick={() => setPreview(null)}
+                className="rounded p-0.5 text-neutral-400 transition hover:bg-neutral-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </span>
+            {previewImageFallback ? (
+              <img
+                src={`/assets/${preview.id}/media`}
+                alt={preview.name}
+                className="max-h-[75vh] w-full object-contain"
+              />
+            ) : (
+              <video
+                controls
+                autoPlay
+                className="max-h-[75vh] w-full"
+                src={`/assets/${preview.id}/media`}
+                onError={() => setPreviewImageFallback(true)}
+              />
+            )}
+          </span>
         </span>
       ) : null}
     </span>

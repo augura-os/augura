@@ -65,6 +65,10 @@ class ReviewItem(BaseModel):
     asset_id: str | None = None
     related_creative_id: str | None = None
     related_creative_name: str | None = None
+    # 合并候选素材预览（kind="merge_candidate" 时携带；左右各取首个变体的素材，
+    # 前端据此渲染缩略图/播放弹层，裁决前不用回忆素材内容）
+    preview_asset_id: str | None = None
+    related_preview_asset_id: str | None = None
     derivation_id: str | None = None
     # 短名展示（裂变待判定）：市场标签 + 文件名尾部区分段
     source_label: str | None = None

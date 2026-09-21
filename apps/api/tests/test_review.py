@@ -117,6 +117,18 @@ class TestMergeCandidates:
         assert items[0].creative_id == pt.id
         assert items[0].related_creative_id == es.id
 
+    def test_merge_candidate_carries_preview_assets(self, db_session: Session) -> None:
+        # 合并卡片预览：左右各取首个变体的素材 id（裁决前能看到素材内容）
+        pt, pt_asset = _seed(db_session, creative_name="c-pt",
+              filename="KS_EN-260104-58-制作人甲-反复挑战重试Ai片头V1-竖.mp4")
+        es, es_asset = _seed(db_session, creative_name="c-es",
+              filename="KS_KR-260104-58-制作人甲-反复挑战重试Ai片头V1-竖.mp4")
+        items = [i for i in merge_candidate_items(db_session)
+                 if "语言对" in i.reason]
+        assert len(items) == 1
+        assert items[0].preview_asset_id == pt_asset.id
+        assert items[0].related_preview_asset_id == es_asset.id
+
     def test_market_pair_same_creative_not_flagged(self, db_session: Session) -> None:
         creative = Creative(id=str(uuid.uuid4()), name="c-same")
         db_session.add(creative)

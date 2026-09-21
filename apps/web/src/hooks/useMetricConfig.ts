@@ -35,6 +35,8 @@ export const DEFAULT_THRESHOLDS: Record<string, number> = {
   roas_weak_line: 0.01,
   d3_roas_weak_line: 0.04,
   d1_retention_weak_line: 0.35,
+  spend_min_signal: 10.0,
+  impressions_min_signal: 5000.0,
 };
 
 /** 阈值输入框的键（Settings 页），顺序与旧版 THRESHOLD_LABEL 一致。 */
@@ -46,6 +48,8 @@ export const THRESHOLD_KEYS = [
   "roas_weak_line",
   "d3_roas_weak_line",
   "d1_retention_weak_line",
+  "spend_min_signal",
+  "impressions_min_signal",
 ] as const;
 
 /** 阈值输入框的标签（随界面语言切换）。 */

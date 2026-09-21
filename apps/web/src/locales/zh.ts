@@ -28,6 +28,8 @@ export const zh: Record<string, string> = {
   "threshold.roas_weak_line": "D1 Roas 弱线",
   "threshold.d3_roas_weak_line": "D3 Roas 弱线",
   "threshold.d1_retention_weak_line": "次留弱线（0.35 = 35%）",
+  "threshold.spend_min_signal": "观察期最小消耗（$）",
+  "threshold.impressions_min_signal": "观察期最小曝光",
 
   "factor.intro-sticker": "前贴",
   "factor.language-market": "语言/市场",

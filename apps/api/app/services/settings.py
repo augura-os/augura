@@ -206,6 +206,9 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "roas_weak_line": 0.01,
     "d3_roas_weak_line": 0.04,
     "d1_retention_weak_line": 0.35,
+    # 数据充分性闸门：消耗与曝光均低于线 → 观察期，不下方向性结论
+    "spend_min_signal": 10.0,
+    "impressions_min_signal": 5000.0,
 }
 
 # 品类默认阈值档（v0.12）：模拟经营/放置沿用全局默认；休闲类（二合/RPG/三消）

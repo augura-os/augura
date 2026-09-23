@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Inbox, Plus, Sparkles, X } from "lucide-react";
@@ -312,44 +313,50 @@ function MergeActions({ item }: { item: ReviewItem }) {
           {t("inbox.merge.failed")}：{errorMessage}
         </span>
       ) : null}
-      {preview ? (
-        // 预览弹层：视频默认 <video> 播放，图片素材加载失败时回退 <img>
-        <span
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setPreview(null)}
-        >
-          <span
-            className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-xl bg-black"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className="flex items-center justify-between gap-2 bg-neutral-900 px-3 py-1.5">
-              <span className="truncate text-xs text-neutral-300">{preview.name}</span>
-              <button
-                title={t("inbox.merge.closePreview")}
-                onClick={() => setPreview(null)}
-                className="rounded p-0.5 text-neutral-400 transition hover:bg-neutral-800 hover:text-white"
+      {preview
+        ? // 预览弹层：视频默认 <video> 播放，图片素材加载失败时回退 <img>。
+          // 必须 portal 到 body：收件箱面板带 backdrop-blur（会形成 fixed
+          // 包含块）且 overflow-hidden，直接渲染 fixed 弹层会被裁剪在
+          // 400px 面板内而不是覆盖全屏。
+          createPortal(
+            <span
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onClick={() => setPreview(null)}
+            >
+              <span
+                className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-xl bg-black"
+                onClick={(e) => e.stopPropagation()}
               >
-                <X className="h-4 w-4" />
-              </button>
-            </span>
-            {previewImageFallback ? (
-              <img
-                src={`/assets/${preview.id}/media`}
-                alt={preview.name}
-                className="max-h-[75vh] w-full object-contain"
-              />
-            ) : (
-              <video
-                controls
-                autoPlay
-                className="max-h-[75vh] w-full"
-                src={`/assets/${preview.id}/media`}
-                onError={() => setPreviewImageFallback(true)}
-              />
-            )}
-          </span>
-        </span>
-      ) : null}
+                <span className="flex items-center justify-between gap-2 bg-neutral-900 px-3 py-1.5">
+                  <span className="truncate text-xs text-neutral-300">{preview.name}</span>
+                  <button
+                    title={t("inbox.merge.closePreview")}
+                    onClick={() => setPreview(null)}
+                    className="rounded p-0.5 text-neutral-400 transition hover:bg-neutral-800 hover:text-white"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </span>
+                {previewImageFallback ? (
+                  <img
+                    src={`/assets/${preview.id}/media`}
+                    alt={preview.name}
+                    className="max-h-[75vh] w-full object-contain"
+                  />
+                ) : (
+                  <video
+                    controls
+                    autoPlay
+                    className="max-h-[75vh] w-full"
+                    src={`/assets/${preview.id}/media`}
+                    onError={() => setPreviewImageFallback(true)}
+                  />
+                )}
+              </span>
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }
@@ -1129,7 +1136,10 @@ export function ReviewInboxPanel({
                   {items.map((item, index) => (
                     // 稳定 key：用业务 id 而非 index——否则列表移位后
                     // DnaAssignActions 等子组件的 useState 会继承上一条目的
-                    // 选中值（建议徽章与下拉框错位的根因）
+                    // 选中值（建议徽章与下拉框错位的根因）。
+                    // 同一 creative 可同时是多对合并候选的左侧（A↔B、A↔C），
+                    // 必须拼上 related_creative_id，否则 key 重复、React 复用
+                    // 错组件实例（预览/裁决状态互相串扰）。
                     <li
                       key={`${kind}-${
                         item.creative_id ??
@@ -1137,7 +1147,7 @@ export function ReviewInboxPanel({
                         item.asset_id ??
                         item.family?.suggestion_id ??
                         index
-                      }`}
+                      }-${item.related_creative_id ?? ""}`}
                     >
                       {item.kind === "low_confidence" && item.asset_id ? (
                         <Link

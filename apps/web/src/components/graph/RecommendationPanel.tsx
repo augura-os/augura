@@ -5,6 +5,7 @@ import { useRecommendations } from "../../hooks/useRecommendations";
 import { useMetricConfig } from "../../hooks/useMetricConfig";
 import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
+import { formatDollars, priorityText } from "./briefLine";
 
 type Group = "urgent" | "optimize" | "healthy";
 
@@ -31,6 +32,16 @@ const GROUP_META: Record<
 const GROUP_ORDER: Group[] = ["urgent", "optimize", "healthy"];
 
 const COLLAPSE_KEY = "augura-rec-panel-collapse-v1";
+const PANEL_COLLAPSE_KEY = "augura-rec-panel-collapsed-v1";
+
+/** 面板折叠状态持久化；默认展开（简报一眼可见），用户折叠后记住。 */
+function loadPanelCollapsed(): boolean {
+  try {
+    return localStorage.getItem(PANEL_COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function loadCollapsed(): Record<Group, boolean> {
   try {
@@ -65,6 +76,7 @@ function ItemRow({
 }) {
   const t = useT();
   const cpp = fmtCpp(item, cppRedLine, t("brief.zeroPayers"));
+  const priority = priorityText(item, t);
   const tooltip = [
     ...item.reasons,
     t("brief.tooltipBase")
@@ -85,6 +97,9 @@ function ItemRow({
         {item.creative_name}
       </span>
       <span className={cn("shrink-0 text-xs tabular-nums", cpp.tone)}>{cpp.text}</span>
+      {priority ? (
+        <span className="shrink-0 text-[11px] tabular-nums text-neutral-500">{priority}</span>
+      ) : null}
     </button>
   );
 }
@@ -98,7 +113,7 @@ export function RecommendationPanel({
   const { data } = useRecommendations();
   const { thresholds } = useMetricConfig();
   const cppRedLine = thresholds.cpp_red_line;
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(loadPanelCollapsed);
   const [groupsCollapsed, setGroupsCollapsed] = useState<Record<Group, boolean>>(loadCollapsed);
 
   const groups = useMemo(() => {
@@ -111,7 +126,21 @@ export function RecommendationPanel({
     return map;
   }, [data]);
 
+  const urgentDollars = useMemo(
+    () => (groups.get("urgent") ?? []).reduce((sum, item) => sum + item.priority_dollars, 0),
+    [groups],
+  );
+
   if (!data || data.items.length === 0) return null;
+
+  const togglePanel = (next: boolean) => {
+    setCollapsed(next);
+    try {
+      localStorage.setItem(PANEL_COLLAPSE_KEY, next ? "1" : "0");
+    } catch {
+      // 持久化失败仅本次会话生效
+    }
+  };
 
   const toggleGroup = (group: Group) => {
     setGroupsCollapsed((prev) => {
@@ -123,10 +152,18 @@ export function RecommendationPanel({
 
   const countOf = (group: Group) => groups.get(group)?.length ?? 0;
 
+  const summary = t("brief.summary")
+    .replace("{urgent}", String(countOf("urgent")))
+    .replace("{optimize}", String(countOf("optimize")))
+    .replace("{healthy}", String(countOf("healthy")))
+    + (urgentDollars >= 1
+      ? t("brief.summaryRisk").replace("{dollars}", formatDollars(urgentDollars))
+      : "");
+
   if (collapsed) {
     return (
       <button
-        onClick={() => setCollapsed(false)}
+        onClick={() => togglePanel(false)}
         className="pointer-events-auto flex items-center gap-2 rounded-full bg-white/85 px-4 py-2 shadow-lg ring-1 ring-black/5 backdrop-blur-xl transition hover:bg-white"
       >
         <Lightbulb className="h-4 w-4 text-amber-500" />
@@ -141,44 +178,30 @@ export function RecommendationPanel({
   }
 
   return (
-    <div className="pointer-events-auto flex max-h-[calc(100%-7rem)] w-[340px] flex-col overflow-hidden rounded-2xl bg-white/85 shadow-lg ring-1 ring-black/5 backdrop-blur-xl">
-      {/* Header + pulse */}
+    <div className="pointer-events-auto flex min-h-0 w-[340px] flex-col overflow-hidden rounded-2xl bg-white/85 shadow-lg ring-1 ring-black/5 backdrop-blur-xl">
+      {/* Header + summary */}
       <div className="flex items-start justify-between px-4 pb-2 pt-3.5">
         <div>
           <h2 className="flex items-center gap-1.5 text-[15px] font-semibold tracking-tight text-neutral-900">
             <Lightbulb className="h-4 w-4 text-amber-500" />
             {t("brief.title")}
           </h2>
+          <p className="mt-0.5 text-[11px] text-neutral-500">{summary}</p>
           <p className="mt-0.5 text-[11px] text-neutral-400">
             {data.date_min} ~ {data.date_max}
           </p>
         </div>
         <button
-          onClick={() => setCollapsed(true)}
+          onClick={() => togglePanel(true)}
           className="rounded-full p-1 text-neutral-400 transition hover:bg-black/5 hover:text-neutral-600"
           aria-label={t("common.collapse")}
         >
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex gap-3 border-y border-black/5 bg-white/40 px-4 py-2">
-        {GROUP_ORDER.map((group) => (
-          <button
-            key={group}
-            onClick={() => toggleGroup(group)}
-            className="flex items-baseline gap-1 transition hover:opacity-80"
-            title={t("brief.expandCollapse").replace("{label}", t(`brief.group.${group}`))}
-          >
-            <span className={cn("text-base font-semibold tabular-nums", GROUP_META[group].text)}>
-              {countOf(group)}
-            </span>
-            <span className="text-[11px] text-neutral-500">{t(`brief.group.${group}`)}</span>
-          </button>
-        ))}
-      </div>
 
       {/* Sections */}
-      <div className="flex-1 overflow-y-auto px-2 py-1.5">
+      <div className="min-h-0 flex-1 overflow-y-auto border-t border-black/5 px-2 py-1.5">
         {GROUP_ORDER.map((group) => {
           const items = groups.get(group) ?? [];
           if (items.length === 0) return null;

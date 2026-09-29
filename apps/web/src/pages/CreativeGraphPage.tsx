@@ -185,7 +185,7 @@ export default function CreativeGraphPage() {
         )}
 
         {/* Legend + density toggle + hint；与今日建议同容器纵向排列，永不重叠 */}
-        <div className="pointer-events-none absolute left-4 top-4 flex flex-col items-start gap-2">
+        <div className="pointer-events-none absolute bottom-4 left-4 top-4 flex flex-col items-start gap-2">
           <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2">
           <div className="flex items-center gap-3">
             {LEGEND.map(({ type, label }) => (

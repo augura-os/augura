@@ -64,6 +64,38 @@ def creative_recommendations(db: DbDep) -> Envelope[RecommendationReport]:
     db.commit()
     states = {c.id: c.lifecycle_state for c in creatives}
 
+    # 货币化 priority（endpoint 叠加，recommendation.py 零改动）：分市场红线按
+    # main_market memo 重推导（与 build_report 同一 resolve_thresholds 数据源）；
+    # 加注空间 proxy = min(起量线, 同 DNA 家族头部消耗) − 自身消耗。
+    from app.services import priority as priority_service
+    from app.services.settings import resolve_thresholds
+
+    threshold_cache: dict[str, dict[str, float]] = {}
+
+    def _red_line(market: str) -> float:
+        if market not in threshold_cache:
+            threshold_cache[market] = resolve_thresholds(db, market or None)
+        return threshold_cache[market]["cpp_red_line"]
+
+    dna_head: dict[str, float] = {}
+    for metrics, _action, _reasons in report.items:
+        if metrics.dna_code:
+            dna_head[metrics.dna_code] = max(
+                dna_head.get(metrics.dna_code, 0.0), metrics.spend
+            )
+    priorities: dict[str, tuple[float, float]] = {}
+    for metrics, action, _reasons in report.items:
+        headroom: float | None = None
+        if metrics.dna_code:
+            head = min(
+                priority_service.SPEND_SIGNIFICANT, dna_head.get(metrics.dna_code, 0.0)
+            )
+            if head > metrics.spend:
+                headroom = head - metrics.spend
+        priorities[metrics.creative_id] = priority_service.priority_score(
+            metrics, action, _red_line(metrics.main_market), scale_headroom=headroom
+        )
+
     order = {"KEEP": 0, "ITERATE": 1, "PAUSE": 2, "ARCHIVE": 3}
     items = [
         RecommendationItem(
@@ -99,10 +131,12 @@ def creative_recommendations(db: DbDep) -> Envelope[RecommendationReport]:
                 "confidence": scores[metrics.creative_id][0].confidence,
             },
             lifecycle_state=states.get(metrics.creative_id, "active"),
+            priority_dollars=priorities[metrics.creative_id][0],
+            confidence=priorities[metrics.creative_id][1],
         )
         for metrics, action, reasons in report.items
     ]
-    items.sort(key=lambda item: (order[item.action], -item.metrics.spend))
+    items.sort(key=lambda item: (order[item.action], -item.priority_dollars))
     return ok(
         RecommendationReport(
             generated_at=report.generated_at,

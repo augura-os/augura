@@ -44,6 +44,9 @@ class RecommendationItem(BaseModel):
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     # 生命周期（services/lifecycle）：active / watch / archived
     lifecycle_state: str = "active"
+    # 货币化优先级（services/priority）：≈ 每日价值金额 + 方向把握后验概率
+    priority_dollars: float = 0.0
+    confidence: float = 0.0
 
 
 class RecommendationReport(BaseModel):

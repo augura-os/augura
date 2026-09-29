@@ -264,6 +264,39 @@ class TestStartupRecovery:
         assert job is not None
         assert job.status == "queued"
 
+    def test_pending_orphan_asset_enqueued(self, worker_session: Session) -> None:
+        """pending 但无 job 的历史遗留素材（队列化前的存量）→ 启动恢复补建。"""
+        asset = _seed_asset(worker_session, "KS_FAKE-260901-orphan.mp4", "pending")
+        assert JobRepository(worker_session).get_by_asset(asset.id) is None
+
+        worker.recover_on_startup()
+
+        worker_session.expire_all()
+        job = JobRepository(worker_session).get_by_asset(asset.id)
+        assert job is not None
+        assert job.status == "queued"
+        # 素材状态保持 pending，等 worker 认领（不被误改）
+        assert AssetRepository(worker_session).get(asset.id).analysis_status == "pending"  # type: ignore[union-attr]
+
+
+class TestBacklogCount:
+    """巩固全扫的低优先级闸门：只数到期 queued，不算 running/未来重试。"""
+
+    def test_counts_due_queued_only(self, db_session: Session) -> None:
+        repo = JobRepository(db_session)
+        due = _seed_asset(db_session, "KS_FAKE-260901-bl-a.mp4")
+        future = _seed_asset(db_session, "KS_FAKE-260901-bl-b.mp4")
+        running = _seed_asset(db_session, "KS_FAKE-260901-bl-c.mp4")
+        repo.enqueue(due.id)
+        repo.enqueue(future.id, available_at=utcnow() + timedelta(hours=1))
+        repo.enqueue(running.id)
+        running_job = repo.get_by_asset(running.id)
+        assert running_job is not None
+        running_job.status = "running"
+        db_session.flush()
+
+        assert repo.backlog_count() == 1
+
 
 class TestLeaseReaper:
     """主循环周期回收（reap_expired_leases）：启动恢复之外的兜底。

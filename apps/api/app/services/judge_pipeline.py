@@ -299,11 +299,16 @@ def run_post_analysis(
         )
     except Exception:  # noqa: BLE001
         logger.exception("post-analysis 漏网扫描失败 creative=%s", creative_id)
-    # 周期性巩固：距上次全扫 ≥7 天或新增 ≥50 条 → 全量扫描+校准
-    # （自带容错与短事务，不重复包裹）
-    from app.services.consolidation import maybe_consolidate
+    # 周期性巩固：距上次全扫 ≥7 天或新增 ≥50 条 → 全量扫描+校准。
+    # 计数（轻量短事务）留在判定通道内同步做；重活全扫挪到守护线程——
+    # 曾在 judge 槽内同步跑数小时，堵死批量上传的判定通道并烧穿额度窗口
+    from app.services.consolidation import (
+        note_analysis_completed,
+        spawn_consolidation_async,
+    )
 
-    maybe_consolidate(db, settings, config)
+    note_analysis_completed(db)
+    spawn_consolidation_async(settings, config)
     # 市场前缀引导：新用户上传即发现命名约定（只建议不配置）
     try:
         from app.services.market_detect import suggest_detected_prefixes

@@ -12,13 +12,17 @@ settings 表（last_run_at + new_since 计数），每次触发写 edit_logs。
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.database import SessionLocal
 from app.repositories.edit_logs import EditLogRepository
+from app.repositories.jobs import JobRepository
 from app.repositories.settings import SettingsRepository
 from app.services.settings import AIConfig
 
@@ -29,6 +33,14 @@ NEW_SINCE_SETTING = "consolidation_new_since"
 # 触发条件：距上次全扫 ≥ 该天数，或期间新增素材 ≥ 该计数（任一满足）
 PERIOD_DAYS = 7
 NEW_ASSETS_THRESHOLD = 50
+
+# 异步低优先级（2026-09 实机教训）：全扫数百对 × 多轮 LLM 投票，曾在
+# judge 槽内同步跑几小时，堵死批量上传的判定通道并一次烧穿 5h 额度窗口。
+# 改为守护线程 + 分析队列积压时有界重试 defer（错过只在进程内，崩溃后
+# last_run_at 未更新，下次分析完成自然重新触发，幂等可恢复）。
+DEFER_CHECK_SECONDS = 300.0
+DEFER_MAX_CHECKS = 36  # ≈3 小时；超了留待下次分析完成再触发
+_spawn_lock = threading.Lock()
 
 
 def should_consolidate(
@@ -50,12 +62,27 @@ def should_consolidate(
     return (now - last).days >= PERIOD_DAYS
 
 
+def note_analysis_completed(db: Session) -> int:
+    """分析完成计数 +1（独立短事务：全扫的 LLM 调用不得跨未提交写）。
+
+    计数留在判定通道内同步执行（轻量）；重活全扫挪到
+    ``spawn_consolidation_async`` 的守护线程。返回当前计数。
+    """
+    repo = SettingsRepository(db)
+    new_since = int(repo.get(NEW_SINCE_SETTING) or 0) + 1
+    repo.set(NEW_SINCE_SETTING, str(new_since))
+    db.commit()
+    return new_since
+
+
 def maybe_consolidate(
-    db: Session, settings: Settings, config: AIConfig | None
+    db: Session, settings: Settings, config: AIConfig | None, *, count: bool = True
 ) -> bool:
-    """每次分析完成后调用：计数 +1；满足条件则全量扫描 + 阈值校准。
+    """满足条件则全量扫描 + 阈值校准。``count=True`` 时先计数 +1。
 
     返回是否真的跑了巩固。失败只记日志（调用方在管线上，不能炸）。
+    异步线程路径（spawn_consolidation_async）已同步计过数，传
+    ``count=False`` 避免 +2。
 
     F3 事务纪律：计数、扫描、留痕、刹车、回流、回填各自独立短事务
     （各自 commit）——此前全部堆在调用方（run_post_analysis）的长事务
@@ -63,9 +90,10 @@ def maybe_consolidate(
     """
     try:
         repo = SettingsRepository(db)
-        new_since = int(repo.get(NEW_SINCE_SETTING) or 0) + 1
-        repo.set(NEW_SINCE_SETTING, str(new_since))
-        db.commit()  # 计数是独立短事务：全扫的 LLM 调用不得跨未提交写
+        if count:
+            new_since = note_analysis_completed(db)
+        else:
+            new_since = int(repo.get(NEW_SINCE_SETTING) or 0)
 
         raw = repo.get(LAST_RUN_SETTING)
         days_since: int | None = None
@@ -171,3 +199,49 @@ def maybe_consolidate(
     except Exception:  # noqa: BLE001 — 非 DB 异常事务未坏，无需回滚
         logger.exception("周期巩固失败")
         return False
+
+
+def spawn_consolidation_async(
+    settings: Settings, config: AIConfig | None
+) -> threading.Thread:
+    """在守护线程里低优先级跑巩固：judge 槽外、分析队列排空后执行。
+
+    队列有积压（到期 queued > 0）时 defer：每 DEFER_CHECK_SECONDS 复查一次，
+    最多 DEFER_MAX_CHECKS 轮；进程崩溃/超时未跑都不留状态——last_run_at
+    只在全扫成功后更新，下次分析完成会重新 spawn，幂等可恢复。
+    返回线程对象（测试可 join）；已在做时立即返回不做任何事的线程。
+    """
+
+    def _run() -> None:
+        if not _spawn_lock.acquire(blocking=False):
+            logger.info("巩固扫描已在进行/等待中，跳过本次触发")
+            return
+        try:
+            for _ in range(DEFER_MAX_CHECKS):
+                with SessionLocal() as db:
+                    if not should_consolidate(db):
+                        return
+                    backlog = JobRepository(db).backlog_count()
+                if backlog == 0:
+                    break
+                logger.info(
+                    "分析队列积压 %d 条，巩固扫描 %.0fs 后复查",
+                    backlog, DEFER_CHECK_SECONDS,
+                )
+                time.sleep(DEFER_CHECK_SECONDS)
+            else:
+                logger.info(
+                    "等待 %d 轮后分析队列仍未排空，巩固留待下次触发",
+                    DEFER_MAX_CHECKS,
+                )
+                return
+            with SessionLocal() as db:
+                # 计数由 run_post_analysis 同步做过（note_analysis_completed），
+                # 这里 count=False 避免重复 +1
+                maybe_consolidate(db, settings, config, count=False)
+        finally:
+            _spawn_lock.release()
+
+    thread = threading.Thread(target=_run, name="consolidation", daemon=True)
+    thread.start()
+    return thread

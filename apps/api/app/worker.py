@@ -7,8 +7,9 @@ thread pool (``settings.analysis_concurrency``), renews a DB lease while
 working, and classifies failures into auth (waiting_user, no retry) /
 retryable (backoff requeue, then dead) / fatal.
 
-Startup recovery re-queues running jobs with expired leases and aligns
-assets stuck in ``processing`` with their job's terminal state.
+Startup recovery re-queues running jobs with expired leases, aligns
+assets stuck in ``processing`` with their job's terminal state, and
+enqueues ``pending`` assets that have no job row (pre-queue leftovers).
 """
 
 from __future__ import annotations
@@ -148,6 +149,13 @@ def recover_on_startup() -> None:
             elif job.status == "queued":
                 asset_repo.set_status(asset, "pending", "")
             # running 且租约未过期 = 另一个活着的 worker 持有，不动
+        # 孤儿补建：pending 但无 job 的素材（队列化之前的升级遗留；upload
+        # 同事务建 job，正常路径不会产生）——补建队列行，否则永远停 pending。
+        orphans = repo.pending_orphan_assets()
+        for orphan in orphans:
+            repo.enqueue(orphan.id)
+        if orphans:
+            logger.info("孤儿素材补建：%d 个 pending 素材重新入队", len(orphans))
         db.commit()
 
 

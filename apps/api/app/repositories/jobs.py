@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -105,4 +105,39 @@ class JobRepository:
                     CreativeAsset.analysis_status == "processing"
                 )
             ).all()
+        )
+
+    def pending_orphan_assets(self) -> list[CreativeAsset]:
+        """pending 但无 job 行的素材（队列化之前的历史遗留等）。
+
+        upload 是 asset+job 同事务，正常路径不会产生孤儿；worker 启动
+        恢复时据此补建队列行，否则它们永远停在 pending 无人认领。
+        """
+        return list(
+            self.db.scalars(
+                select(CreativeAsset)
+                .outerjoin(AnalysisJob, AnalysisJob.asset_id == CreativeAsset.id)
+                .where(
+                    CreativeAsset.analysis_status == "pending",
+                    AnalysisJob.id.is_(None),
+                )
+            ).all()
+        )
+
+    def backlog_count(self, now: datetime | None = None) -> int:
+        """已到期可认领的 queued job 数（不含 running）。
+
+        巩固全扫的低优先级闸门：>0 说明批量上传还在消化，全扫让路；
+        不含 running——否则最后一条素材的 post-analysis 会永远堵自己。
+        """
+        now = now or utcnow()
+        return int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(AnalysisJob)
+                .where(
+                    AnalysisJob.status == "queued",
+                    AnalysisJob.available_at <= now,
+                )
+            ) or 0
         )

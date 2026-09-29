@@ -129,13 +129,92 @@ class TestPostAnalysisHook:
         db_session.flush()
         calls: list[bool] = []
         monkeypatch.setattr(
-            consolidation, "maybe_consolidate",
-            lambda db, settings, config: calls.append(True) or False,
+            consolidation, "spawn_consolidation_async",
+            lambda settings, config: calls.append(True),
         )
         judge_pipeline.run_post_analysis(
             db_session, None, creative.id, settings=Settings()
         )
         assert calls == [True]
+        # 计数留在判定通道内同步 +1（全扫挪到异步线程）
+        assert SettingsRepository(db_session).get(NEW_SINCE_SETTING) == "1"
+
+
+class TestSpawnConsolidationAsync:
+    """异步低优先级：队列积压 defer 有界重试；排空后才全扫；防重入。"""
+
+    def _bind_session(self, monkeypatch, db_session: Session) -> None:  # noqa: ANN001
+        from sqlalchemy.orm import sessionmaker
+
+        monkeypatch.setattr(
+            consolidation, "SessionLocal",
+            sessionmaker(bind=db_session.get_bind(), autoflush=False,
+                         expire_on_commit=False),
+        )
+
+    def _seed_backlog(self, db_session: Session) -> None:
+        from app.models import CreativeAsset
+        from app.repositories.jobs import JobRepository
+
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="spawn-backlog.mp4",
+            file_type="video", storage_key=f"test/{uuid.uuid4()}",
+            analysis_status="pending",
+        )
+        db_session.add(asset)
+        db_session.flush()
+        JobRepository(db_session).enqueue(asset.id)
+        db_session.flush()
+
+    def test_runs_when_queue_idle(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        self._bind_session(monkeypatch, db_session)
+        _set_last_run(db_session, 10)
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            consolidation, "maybe_consolidate",
+            lambda db, settings, config, **k: calls.append(k) or True,
+        )
+        t = consolidation.spawn_consolidation_async(Settings(), None)
+        t.join(timeout=10)
+        # 计数由 run_post_analysis 同步做过，线程内 count=False 防 +2
+        assert calls == [{"count": False}]
+
+    def test_defers_while_backlog(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        self._bind_session(monkeypatch, db_session)
+        _set_last_run(db_session, 10)
+        self._seed_backlog(db_session)
+        monkeypatch.setattr(consolidation, "DEFER_MAX_CHECKS", 2)
+        monkeypatch.setattr(consolidation, "DEFER_CHECK_SECONDS", 0)
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            consolidation, "maybe_consolidate",
+            lambda db, settings, config, **k: calls.append(k) or True,
+        )
+        t = consolidation.spawn_consolidation_async(Settings(), None)
+        t.join(timeout=10)
+        assert calls == []  # 队列未排空，全扫让路
+
+    def test_concurrent_spawn_skipped(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        self._bind_session(monkeypatch, db_session)
+        _set_last_run(db_session, 10)
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            consolidation, "maybe_consolidate",
+            lambda db, settings, config, **k: calls.append(k) or True,
+        )
+        consolidation._spawn_lock.acquire()
+        try:
+            t = consolidation.spawn_consolidation_async(Settings(), None)
+            t.join(timeout=10)
+        finally:
+            consolidation._spawn_lock.release()
+        assert calls == []
 
 
 class TestBrakeSidecar:

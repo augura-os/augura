@@ -206,6 +206,15 @@ export function runAnalysis(assetId: string): Promise<AnalysisResult> {
   return unwrap(apiClient.post<ApiResponse<AnalysisResult>>("/analysis", body, { timeout: 180000 }));
 }
 
+/** POST /jobs/{assetId}/retry — 把 failed/dead 的分析任务重新排队（worker 自动重跑）。 */
+export function retryAnalysisJob(assetId: string): Promise<{ id: string; asset_id: string; status: string }> {
+  return unwrap(
+    apiClient.post<ApiResponse<{ id: string; asset_id: string; status: string }>>(
+      `/jobs/${assetId}/retry`,
+    ),
+  );
+}
+
 // --- Settings ----------------------------------------------------------------
 
 export function fetchSettings(): Promise<SettingsResponse> {

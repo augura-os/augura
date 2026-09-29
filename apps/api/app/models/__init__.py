@@ -7,6 +7,7 @@ from app.models.derivation import VariantDerivation
 from app.models.dna import CreativeDNA
 from app.models.edit_log import EditLog
 from app.models.graph import GraphEdge, GraphNode
+from app.models.job import AnalysisJob
 from app.models.judge import JudgeSuggestion
 from app.models.project import Project
 from app.models.ruling import SplitRuling
@@ -14,6 +15,7 @@ from app.models.setting import Setting
 from app.models.tag import Tag, TagAssignment
 
 __all__ = [
+    "AnalysisJob",
     "AnalysisResult",
     "Base",
     "Creative",

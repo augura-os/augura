@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileImage, FileSpreadsheet, FileVideo, Search } from "lucide-react";
+import { FileImage, FileSpreadsheet, FileVideo, RotateCcw, Search } from "lucide-react";
 import type { FileType } from "@shared";
-import { useAssets } from "../hooks/useAssets";
+import { useAssets, useRetryAnalysisJob } from "../hooks/useAssets";
 import { StatusBadge } from "../components/assets/StatusBadge";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
@@ -43,6 +43,8 @@ export default function AssetListPage() {
   }, [searchInput]);
 
   const { data, isLoading, isError, error, isFetching } = useAssets(search);
+  const retryJob = useRetryAnalysisJob();
+  const [retryError, setRetryError] = useState<string | null>(null);
   const filtered = data?.filter((asset) =>
     lifecycleFilter === "all"
       ? true
@@ -101,6 +103,8 @@ export default function AssetListPage() {
             {error instanceof Error ? error.message : t("assets.list.loadFailed")}
           </p>
         ) : null}
+
+        {retryError ? <p className="text-sm text-red-600">{retryError}</p> : null}
 
         <div className="rounded-lg border border-[#e5e5e5] bg-white">
           <Table>
@@ -164,6 +168,29 @@ export default function AssetListPage() {
                   <TableCell>
                     <span className="inline-flex items-center gap-1.5">
                       <StatusBadge status={asset.analysis_status} />
+                      {asset.analysis_status === "failed" ? (
+                        <button
+                          type="button"
+                          title={t("assets.list.retryTitle")}
+                          disabled={retryJob.isPending}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setRetryError(null);
+                            retryJob.mutate(asset.id, {
+                              onError: (mutationError) =>
+                                setRetryError(
+                                  mutationError instanceof Error
+                                    ? mutationError.message
+                                    : t("assets.list.retryFailed"),
+                                ),
+                            });
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-50"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          {t("assets.list.retry")}
+                        </button>
+                      ) : null}
                       {asset.confidence !== null && asset.confidence < 0.7 ? (
                         <Badge
                           variant="warning"

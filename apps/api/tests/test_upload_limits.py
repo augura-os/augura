@@ -8,7 +8,7 @@ from __future__ import annotations
 import io
 
 import pytest
-from fastapi import BackgroundTasks, UploadFile
+from fastapi import UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,7 @@ def test_oversize_file_rejected_413(db_session: Session) -> None:
     storage = _FakeStorage()
     with pytest.raises(ApiError) as excinfo:
         upload_files(
-            BackgroundTasks(), db_session, settings, storage,  # type: ignore[arg-type]
+            db_session, settings, storage,  # type: ignore[arg-type]
             [_upload("big.mp4", b"x" * 9)],
         )
     assert excinfo.value.status_code == 413
@@ -54,7 +54,7 @@ def test_file_at_limit_passes(db_session: Session) -> None:
     settings = Settings(upload_max_bytes=8, upload_dir="/tmp")
     storage = _FakeStorage()
     result = upload_files(
-        BackgroundTasks(), db_session, settings, storage,  # type: ignore[arg-type]
+        db_session, settings, storage,  # type: ignore[arg-type]
         [_upload("ok.mp4", b"x" * 8)],
     )
     assert result.success is True

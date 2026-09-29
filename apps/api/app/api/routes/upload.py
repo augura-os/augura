@@ -1,8 +1,9 @@
 """POST /upload — multipart multi-file upload (contract §3).
 
-mp4/mov/png/jpg → MinIO + asset row (analysis_status=pending) + background
-AI analysis. xlsx/xls → MinIO + asset row (analysis_status=none) + pandas
-parse into Performance rows (synchronous).
+mp4/mov/png/jpg → MinIO + asset row (analysis_status=pending) + a durable
+``analysis_jobs`` row picked up by the worker process (app.worker).
+xlsx/xls → MinIO + asset row (analysis_status=none) + pandas parse into
+Performance rows (synchronous).
 """
 
 from __future__ import annotations
@@ -12,18 +13,18 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, File, UploadFile
+from fastapi import APIRouter, File, UploadFile
 
 from app.api.deps import DbDep, SettingsDep, StorageDep
 from app.api.presenters import to_asset_list_item
 from app.exceptions import ApiError
 from app.models import CreativeAsset
 from app.repositories.assets import AssetRepository
+from app.repositories.jobs import JobRepository
 from app.repositories.performance import PerformanceRepository
 from app.schemas.asset import SkippedFile, UploadResult
 from app.schemas.common import Envelope, ok
 from app.services.excel import detect_overlap, parse_excel
-from app.services.pipeline import run_analysis_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,6 @@ _ALLOWED: dict[str, tuple[str, str]] = {
 
 @router.post("/upload", response_model=Envelope[UploadResult])
 def upload_files(
-    background_tasks: BackgroundTasks,
     db: DbDep,
     settings: SettingsDep,
     storage: StorageDep,
@@ -57,6 +57,7 @@ def upload_files(
         raise ApiError(400, "未接收到文件（字段名应为 files）")
 
     asset_repo = AssetRepository(db)
+    job_repo = JobRepository(db)
     created: list[CreativeAsset] = []
     skipped: list[SkippedFile] = []
     warnings: list[str] = []
@@ -131,14 +132,15 @@ def upload_files(
 
         if file_type == "excel" and parsed_rows is not None:
             PerformanceRepository(db).bulk_create(asset.id, parsed_rows)
+        elif file_type in ("video", "image"):
+            # Durable queue row, same transaction as the asset: the worker
+            # process picks it up — no in-process background task that could
+            # starve the API or die with it.
+            job_repo.enqueue(asset.id)
 
         created.append(asset)
 
     db.commit()
-
-    for asset in created:
-        if asset.file_type in ("video", "image"):
-            background_tasks.add_task(run_analysis_pipeline, asset.id)
 
     message = f"已上传 {len(created)} 个文件"
     if skipped:

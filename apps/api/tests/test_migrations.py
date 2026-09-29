@@ -20,6 +20,7 @@ ADMIN_URL = os.environ.get(
 DB_NAME = "augura_migration_test"
 
 EXPECTED_TABLES = {
+    "analysis_jobs",
     "analysis_results",
     "creative_assets",
     "creative_variants",

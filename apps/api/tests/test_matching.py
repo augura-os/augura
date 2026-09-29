@@ -48,3 +48,53 @@ class TestMatches:
         a = BOILER + "abc-def"
         b = BOILER + "abc-xyz"
         assert not matches(a, b)
+
+
+class TestIndexEquivalence:
+    """match_rows（索引路径）必须与逐行 matches（旧路径）产出完全一致。
+
+    性能优化把 O(变体×行数) 的逐行 normalize+matches 换成 distinct-name 索引，
+    这里钉死两条路径在同一输入下的等价性，防止索引实现悄悄改变匹配语义。
+    """
+
+    NAMES = [
+        BOILER + "混乱管理前贴2-竖",
+        BOILER + "混乱管理前贴2",          # Excel 名掉了 -竖 后缀
+        BOILER + "围栏防御前贴1-竖",
+        "山林采集-制作人乙",               # 短名，低于 MIN_PREFIX
+        "ＫＳ_ＥＮ-全角变体-260101-58-制作人甲-模拟经营-ai-制作人丁-混乱管理前贴2",
+        "",                                 # 空名：索引跳过，逐行也不匹配
+        "x" * MIN_PREFIX,
+        "x" * MIN_PREFIX + "tail",
+    ]
+
+    STEMS = [
+        BOILER + "混乱管理前贴2-竖.mp4",
+        BOILER + "围栏防御前贴1.mp4",
+        "山林采集-制作人乙.mp4",
+        "x" * MIN_PREFIX + "tail-more",
+        "completely-unrelated-name",
+    ]
+
+    def test_match_rows_equals_bruteforce(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.matching import index_performances, match_rows
+
+        rows = [SimpleNamespace(creative_name=n) for n in self.NAMES]
+        index = index_performances(rows)
+        for stem in self.STEMS:
+            expected = [r for r in rows if r.creative_name and matches(stem, r.creative_name)]
+            assert match_rows(index, stem) == expected, stem
+
+    def test_index_groups_distinct_normalized_names(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.matching import index_performances
+
+        rows = [SimpleNamespace(creative_name=n) for n in self.NAMES]
+        index = index_performances(rows)
+        distinct = {normalize(n) for n in self.NAMES if n}
+        assert len(index.entries) == len(distinct)
+        non_empty = [n for n in self.NAMES if n]
+        assert sum(len(rs) for _, rs in index.entries) == len(non_empty)

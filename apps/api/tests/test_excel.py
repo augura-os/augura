@@ -108,3 +108,22 @@ def test_metrics_from_raw_missing_keys() -> None:
         "cpi": None,
         "ipm": None,
     }
+
+
+def test_resolve_raw_columns_cache_keyed_by_keys_not_values() -> None:
+    """列解析缓存以列名集合为 key：同布局不同数值的行不得串值。"""
+    base = {"素材名称": "x", "消耗": 100.0, "安装数": 50}
+    first = metrics_from_raw(dict(base))
+    second = metrics_from_raw({**base, "消耗": 200.0, "安装数": 25})
+    assert first["cpi"] == 2.0
+    assert second["cpi"] == 8.0  # 若缓存误存结果而非列名，这里会错成 2.0
+
+
+def test_resolve_raw_columns_equivalent_across_key_order() -> None:
+    """key 顺序不同但集合相同 → 命中同一缓存项，解析结果一致。"""
+    from app.services.excel import _resolve_raw_columns
+
+    keys = ["素材名称", "消耗", "安装数", "展示数"]
+    forward = _resolve_raw_columns(tuple(sorted(keys)))
+    reverse = _resolve_raw_columns(tuple(sorted(keys, reverse=True)))
+    assert forward == reverse

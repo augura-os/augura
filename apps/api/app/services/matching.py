@@ -12,6 +12,11 @@ the distinguishing part of the name. Short CJK names like
 from __future__ import annotations
 
 import unicodedata
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Sequence
+
+if TYPE_CHECKING:
+    from app.models import Performance
 
 MIN_PREFIX = 34
 
@@ -28,3 +33,37 @@ def matches(asset_filename: str, excel_creative_name: str) -> bool:
     excel = normalize(excel_creative_name)
     shorter, longer = (stem, excel) if len(stem) <= len(excel) else (excel, stem)
     return len(shorter) >= MIN_PREFIX and longer.startswith(shorter)
+
+
+@dataclass
+class PerformanceIndex:
+    """distinct normalized creative_name → the rows sharing it.
+
+    Built once per request/report from the preloaded performances table.
+    Matching every variant stem against ~2k distinct names instead of ~11k
+    raw rows — and normalizing each name exactly once — is the difference
+    between a 26s and a sub-second recommendation pass (same ``matches``
+    rule, far fewer calls).
+    """
+
+    entries: list[tuple[str, list["Performance"]]]
+
+
+def index_performances(rows: Sequence["Performance"]) -> PerformanceIndex:
+    grouped: dict[str, list[Performance]] = {}
+    for row in rows:
+        if not row.creative_name:
+            continue
+        grouped.setdefault(normalize(row.creative_name), []).append(row)
+    return PerformanceIndex(entries=list(grouped.items()))
+
+
+def match_rows(index: PerformanceIndex, asset_stem: str) -> list["Performance"]:
+    """All indexed rows matching ``asset_stem`` under the same rule as ``matches``."""
+    stem = normalize(asset_stem)
+    found: list[Performance] = []
+    for excel, rows in index.entries:
+        shorter, longer = (stem, excel) if len(stem) <= len(excel) else (excel, stem)
+        if len(shorter) >= MIN_PREFIX and longer.startswith(shorter):
+            found.extend(rows)
+    return found

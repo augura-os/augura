@@ -19,13 +19,25 @@ from typing import Literal, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Creative, CreativeDNA, Performance
+from app.models import (
+    Creative,
+    CreativeAsset,
+    CreativeDNA,
+    CreativeVariant,
+    Performance,
+    VariantDerivation,
+)
 from app.repositories.assets import AssetRepository
 from app.repositories.creatives import VariantRepository
-from app.repositories.derivations import DerivationRepository
 from app.repositories.performance import PerformanceRepository
 from app.services.excel import metrics_from_raw
-from app.services.matching import matches, normalize
+from app.services.matching import (
+    PerformanceIndex,
+    index_performances,
+    match_rows,
+    matches,
+    normalize,
+)
 from app.services.settings import (
     DEFAULT_JUDGE_METRICS,
     DEFAULT_THRESHOLDS,
@@ -92,21 +104,30 @@ def collect_creative_performance(
     creative: Creative,
     *,
     all_performances: Sequence[Performance] | None = None,
+    performance_index: PerformanceIndex | None = None,
+    variants: Sequence[CreativeVariant] | None = None,
+    assets_by_id: dict[str, CreativeAsset] | None = None,
 ) -> list[Performance]:
     """All delivery rows matched to a creative's assets (deduplicated).
 
     Shared by the /creatives/{id}/performance route and this engine so the
     matching semantics (services/matching, MIN_PREFIX) stay in one place.
-    Callers that aggregate many creatives in one request should preload the
-    performances table once and pass ``all_performances`` — otherwise each
-    creative costs a full table scan (N+1).
+    Callers that aggregate many creatives in one request should preload once
+    and pass ``performance_index`` (distinct-name inverted index) plus the
+    ``variants`` / ``assets_by_id`` batches — otherwise each creative costs
+    per-row matching and ORM lookups (N+1).
     """
     from pathlib import PurePosixPath
 
-    asset_repo = AssetRepository(db)
-    variants = VariantRepository(db).list_by_creative(creative.id)
+    if variants is None:
+        variants = VariantRepository(db).list_by_creative(creative.id)
 
-    if all_performances is None:
+    if performance_index is not None:
+
+        def matched(stem: str) -> list[Performance]:
+            return match_rows(performance_index, stem)
+
+    elif all_performances is None:
         performance_repo = PerformanceRepository(db)
 
         def matched(stem: str) -> list[Performance]:
@@ -123,10 +144,15 @@ def collect_creative_performance(
                 if row.creative_name and matches(normalized, row.creative_name)
             ]
 
+    asset_repo = None if assets_by_id is not None else AssetRepository(db)
     seen: set[str] = set()
     rows: list[Performance] = []
     for variant in variants:
-        asset = asset_repo.get(variant.asset_id)
+        asset = (
+            assets_by_id.get(variant.asset_id)
+            if assets_by_id is not None
+            else asset_repo.get(variant.asset_id)  # type: ignore[union-attr]
+        )
         if asset is None:
             continue
         for row in matched(PurePosixPath(asset.filename).stem):
@@ -367,18 +393,61 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
     metric_config = resolve_metric_config(db)
     prefixes = resolve_market_prefixes(db)
 
-    items: list[tuple[CreativeMetrics, RecommendationAction, list[str]]] = []
-    variant_repo = VariantRepository(db)
-    derivation_repo = DerivationRepository(db)
+    # 批量预载（替代逐 creative 的 variants/derivations/assets N+1 查询）
+    creative_ids = [creative.id for creative in creatives]
+    variants_by_creative: dict[str, list[CreativeVariant]] = {}
+    if creative_ids:
+        stmt = select(CreativeVariant).where(
+            CreativeVariant.creative_id.in_(creative_ids)
+        )
+        for variant in db.scalars(stmt).all():
+            variants_by_creative.setdefault(variant.creative_id, []).append(variant)
+    asset_ids = {v.asset_id for vs in variants_by_creative.values() for v in vs}
+    assets_by_id: dict[str, CreativeAsset] = {}
+    if asset_ids:
+        assets_by_id = {
+            asset.id: asset
+            for asset in db.scalars(
+                select(CreativeAsset).where(CreativeAsset.id.in_(asset_ids))
+            ).all()
+        }
+    derivations_by_creative: dict[str, list[VariantDerivation]] = {}
+    if creative_ids:
+        stmt = (
+            select(VariantDerivation, CreativeVariant.creative_id)
+            .join(
+                CreativeVariant,
+                CreativeVariant.id == VariantDerivation.source_variant_id,
+            )
+            .where(CreativeVariant.creative_id.in_(creative_ids))
+        )
+        for derivation, creative_id in db.execute(stmt).all():
+            derivations_by_creative.setdefault(creative_id, []).append(derivation)
+
+    # distinct-name 倒排索引：2k 个名字只 normalize 一次，
+    # 替代"每个 variant × 全部行"的逐行匹配（profile 热点 72%）
     all_performances = list(db.scalars(select(Performance)).all())
+    performance_index = index_performances(all_performances)
+    threshold_cache: dict[str, dict[str, float]] = {}
+
+    def _thresholds(market: str) -> dict[str, float]:
+        if market not in threshold_cache:
+            threshold_cache[market] = resolve_thresholds(db, market or None)
+        return threshold_cache[market]
+
+    items: list[tuple[CreativeMetrics, RecommendationAction, list[str]]] = []
     for creative in creatives:
+        variants = variants_by_creative.get(creative.id, [])
         rows = collect_creative_performance(
-            db, creative, all_performances=all_performances
+            db,
+            creative,
+            performance_index=performance_index,
+            variants=variants,
+            assets_by_id=assets_by_id,
         )
         dna = dnas.get(creative.dna_id) if creative.dna_id else None
-        derivations = derivation_repo.list_for_creative(creative.id)
+        derivations = derivations_by_creative.get(creative.id, [])
         judged = [d for d in derivations if d.verdict != "pending"]
-        variants = variant_repo.list_by_creative(creative.id)
         # 主市场 = 消耗最高变体的市场；无投放数据退回变体文件名前缀
         main_market = market_stats.main_market_for_rows(rows, prefixes)
         if not main_market:
@@ -398,10 +467,10 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             positive_count=sum(1 for d in judged if d.verdict == "positive"),
             main_market=main_market,
         )
-        # 分市场阈值：市场覆盖 → 用户全局覆盖/品类档 → 全局默认
+        # 分市场阈值：市场覆盖 → 用户全局覆盖/品类档 → 全局默认（按市场 memo）
         market_config = replace(
             metric_config,
-            thresholds=resolve_thresholds(db, metrics.main_market or None),
+            thresholds=_thresholds(metrics.main_market),
         )
         action, reasons = recommend(metrics, market_config)
         items.append((metrics, action, reasons + supplementary_reasons(metrics)))
@@ -419,8 +488,7 @@ def _observation_partners(db: Session) -> dict[str, list[str]]:
         from app.config import get_settings
         from app.services import graph_sync
 
-        repo = graph_sync.get_graph_repository(get_settings())
-        records = repo.read_similar_pairs()
+        records = graph_sync.read_similar_pairs_cached(get_settings())
         id_to_name = {c.id: c.name for c in db.query(Creative).all()}
         partners: dict[str, list[str]] = {}
         for source_ref, target_ref in records:

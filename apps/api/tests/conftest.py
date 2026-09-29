@@ -66,6 +66,17 @@ def test_db_url() -> Iterator[str]:
         conn.execute(text(f"DROP DATABASE IF EXISTS {TEST_DB_NAME}"))
 
 
+@pytest.fixture(autouse=True)
+def _clear_similar_pairs_cache() -> Iterator[None]:
+    # graph_sync 的 SIMILAR_TO 读取带 300s TTL 进程内缓存；测试用 monkeypatch
+    # 换掉 get_graph_repository 后必须看到当次 stub 的 pairs，不能吃到上个测试的缓存。
+    from app.services import graph_sync
+
+    graph_sync.invalidate_similar_pairs_cache()
+    yield
+    graph_sync.invalidate_similar_pairs_cache()
+
+
 @pytest.fixture()
 def db_session(test_db_url: str) -> Iterator[Session]:
     engine = create_engine(test_db_url)

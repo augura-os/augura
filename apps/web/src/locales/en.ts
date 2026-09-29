@@ -319,6 +319,9 @@ export const en: Record<string, string> = {
   "assets.list.confidenceTitle":
     "AI confidence {pct}% — below 70%, human review recommended",
   "assets.list.needsReview": "Needs review",
+  "assets.list.retry": "Retry",
+  "assets.list.retryTitle": "Requeue AI analysis (the worker reruns it)",
+  "assets.list.retryFailed": "Retry failed",
   "assets.list.emptySearch": "No assets match your search.",
   "assets.list.empty": "No assets yet — upload some first.",
   "assets.list.refreshing": "Refreshing…",

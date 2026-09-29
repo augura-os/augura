@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import lru_cache
 from typing import Sequence
 
 import numpy as np
@@ -211,22 +212,49 @@ def parse_excel(path: str) -> list[ParsedPerformanceRow]:
     return rows
 
 
+@lru_cache(maxsize=64)
+def _resolve_raw_columns(
+    keys_signature: tuple[str, ...],
+) -> tuple[str | None, ...]:
+    """Column resolution for a raw-row key set, cached.
+
+    ``metrics_from_raw`` runs per performance row, but every row from the same
+    Excel shares the exact same columns — resolving 9 columns × keywords per
+    row was a measurable hotspot (profile: ~3.3s per recommendation pass).
+    Keyed by sorted key tuple; distinct Excel layouts in one deployment are
+    a handful, so a small LRU is ample.
+    """
+    keys = list(keys_signature)
+    return (
+        _find_column(keys, *_PAYER_KEYS, exclude_rate_cost=True),
+        _find_column(keys, *_D1_ROAS_KEYS),
+        _find_column(keys, *_D3_ROAS_KEYS),
+        _find_column(keys, *_D1_RETENTION_KEYS),
+        _find_column(keys, *_CPI_KEYS),
+        _find_column(keys, *_IPM_KEYS),
+        _find_column(keys, *_SPEND_KEYS, exclude_rate_cost=True),
+        _find_column(keys, *_INSTALL_KEYS, exclude_rate_cost=True),
+        _find_column(keys, *_IMPRESSION_KEYS, exclude_rate_cost=True),
+    )
+
+
 def metrics_from_raw(raw: dict[str, object]) -> dict[str, float | int | None]:
     """Normalize a stored ``Performance.raw`` row into display metrics.
 
     The raw JSON keeps the original Excel cells, so rows imported before
     the payer/ROAS/CPI/IPM fields existed still surface them here.
     """
-    keys = list(raw.keys())
-    payers_col = _find_column(keys, *_PAYER_KEYS, exclude_rate_cost=True)
-    d1_roas_col = _find_column(keys, *_D1_ROAS_KEYS)
-    d3_roas_col = _find_column(keys, *_D3_ROAS_KEYS)
-    d1_retention_col = _find_column(keys, *_D1_RETENTION_KEYS)
-    cpi_col = _find_column(keys, *_CPI_KEYS)
-    ipm_col = _find_column(keys, *_IPM_KEYS)
-    spend_col = _find_column(keys, *_SPEND_KEYS, exclude_rate_cost=True)
-    installs_col = _find_column(keys, *_INSTALL_KEYS, exclude_rate_cost=True)
-    impressions_col = _find_column(keys, *_IMPRESSION_KEYS, exclude_rate_cost=True)
+    (
+        payers_col,
+        d1_roas_col,
+        d3_roas_col,
+        d1_retention_col,
+        cpi_col,
+        ipm_col,
+        spend_col,
+        installs_col,
+        impressions_col,
+    ) = _resolve_raw_columns(tuple(sorted(raw.keys())))
 
     spend = _to_number(raw[spend_col]) if spend_col else None
     installs = _to_number(raw[installs_col]) if installs_col else None

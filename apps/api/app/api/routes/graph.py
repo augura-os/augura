@@ -144,6 +144,7 @@ def link_observation_pair(
         graph_sync.get_graph_repository(settings).link_similar(
             source.id, target.id, payload.reason
         )
+        graph_sync.invalidate_similar_pairs_cache()
     except Exception as exc:  # noqa: BLE001
         raise ApiError(502, f"Neo4j 观察对建立失败：{exc}") from exc
 
@@ -174,6 +175,7 @@ def close_observation_pair(
 
     try:
         graph_sync.get_graph_repository(settings).unlink_similar(source.id, target.id)
+        graph_sync.invalidate_similar_pairs_cache()
     except Exception as exc:  # noqa: BLE001
         raise ApiError(502, f"Neo4j 观察对结案失败：{exc}") from exc
 

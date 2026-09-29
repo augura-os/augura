@@ -9,6 +9,7 @@ rebuilt from relational state afterwards and powers the /graph fallback.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Sequence
 
 from graph import GraphRepository
@@ -32,6 +33,31 @@ def get_graph_repository(settings: Settings) -> GraphRepository:
             settings.neo4j_password,
         )
     return _repository
+
+
+# SIMILAR_TO 变化极少（仅人工建/拆观察对），但每次 recommendations / review
+# 请求都同步查一次 Neo4j（实测单次 ~2.3s）。进程内短 TTL 缓存 + 写操作主动失效。
+_SIMILAR_PAIRS_TTL_SECONDS = 300.0
+_similar_pairs_cache: tuple[float, list[tuple[str, str]]] | None = None
+
+
+def read_similar_pairs_cached(settings: Settings) -> list[tuple[str, str]]:
+    """``read_similar_pairs`` with a short process-local TTL."""
+    global _similar_pairs_cache
+    now = time.monotonic()
+    if _similar_pairs_cache is not None:
+        cached_at, pairs = _similar_pairs_cache
+        if now - cached_at < _SIMILAR_PAIRS_TTL_SECONDS:
+            return pairs
+    pairs = list(get_graph_repository(settings).read_similar_pairs())
+    _similar_pairs_cache = (now, pairs)
+    return pairs
+
+
+def invalidate_similar_pairs_cache() -> None:
+    """Drop the TTL cache (called after link_similar / unlink_similar)."""
+    global _similar_pairs_cache
+    _similar_pairs_cache = None
 
 
 def sync_asset_subgraph(

@@ -208,7 +208,7 @@ def _observation_pair_refs() -> set[frozenset[str]]:
         from app.config import get_settings
         from app.services import graph_sync
 
-        pairs = graph_sync.get_graph_repository(get_settings()).read_similar_pairs()
+        pairs = graph_sync.read_similar_pairs_cached(get_settings())
         return {frozenset(pair) for pair in pairs}
     except Exception:  # noqa: BLE001
         return set()
@@ -382,7 +382,7 @@ def observation_pair_items(
         from app.config import get_settings
         from app.services import graph_sync
 
-        pairs = graph_sync.get_graph_repository(get_settings()).read_similar_pairs()
+        pairs = graph_sync.read_similar_pairs_cached(get_settings())
     except Exception:  # noqa: BLE001 — Neo4j 不可用时观察对留空
         return []
     creatives = {c.id: c for c in db.scalars(select(Creative)).all()}

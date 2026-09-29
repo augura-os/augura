@@ -11,8 +11,9 @@ completed / failed.
 attach 判定恒走文本通道（设计 §3.2 shadow 默认）；embedding 向量只为
 E2 的漏合并召回积累数据。
 
-Runs in a FastAPI background task (upload) or synchronously
-(POST /analysis). Always uses its own DB session.
+Runs synchronously (POST /analysis) or in the standalone worker process
+(``python -m app.worker``) driven by durable ``analysis_jobs`` rows.
+Always uses its own DB session.
 """
 
 from __future__ import annotations
@@ -28,13 +29,15 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
-from app.models import Creative, CreativeAsset
+from app.models import AnalysisResult, Creative, CreativeAsset
 from app.repositories.analysis import AnalysisRepository
 from app.repositories.assets import AssetRepository
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import rebuild_mirror
+from app.repositories.jobs import JobRepository
 from app.repositories.tags import TagRepository
+from app.schemas.analysis import AnalysisPayload
 from app.services import graph_sync
 from app.services.analysis import AnalysisService
 from app.services.clustering import (
@@ -291,12 +294,18 @@ def _cluster(
     return creative, previous_creative_id
 
 
-# 分析并发上限：批量上传 = 每文件一个后台任务，每个 pipeline 在整个 LLM
-# 调用期间持有一个 DB session，不封顶会把连接池打爆（QueuePool timeout）。
+class MissingAIKeyError(RuntimeError):
+    """AI key 未配置：worker 归类为 waiting_user（提示去 Settings），不重试。"""
+
+
+# 分析并发上限：POST /analysis 同步入口的进程内闸门，每个 pipeline 在 LLM
+# 调用期间持有 DB session，不封顶会把连接池打爆（QueuePool timeout）。
 # F3 双槽模型：本槽只覆盖分析核心（_run_analysis_pipeline：抽帧/LLM/嵌入/
 # 聚类 + completed 落库 + 紧随的重算/图同步/镜像重建）；判定阶段在槽释放后
 # 运行，用 judge_pipeline._JUDGE_SLOTS 独立限流——判定挂起不再堵死分析通道
-# （事故时判定共槽，LLM 卡住 → 槽不释放 → 37 个上传任务占满线程池，全站挂起）
+# （事故时判定共槽，LLM 卡住 → 槽不释放 → 37 个上传任务占满线程池，全站挂起）。
+# 批量上传不走本进程：upload 只写 analysis_jobs，worker 进程的有界线程池
+# 承担并发闸门，不再经过 _PIPELINE_SLOTS。
 _PIPELINE_SLOTS = threading.Semaphore(get_settings().analysis_concurrency)
 
 
@@ -328,8 +337,68 @@ def _run_judge_phase(creative_id: str) -> None:
             db.close()
 
 
-def _run_analysis_pipeline(asset_id: str) -> str | None:
-    """分析核心；成功返回 creative.id（供判定阶段用），失败/跳过返回 None。"""
+def _update_job_stage(job_id: str | None, stage: str) -> None:
+    """Best-effort 进度上报（独立短 session，不掺和 pipeline 自身事务）。"""
+    if job_id is None:
+        return
+    try:
+        with SessionLocal() as session:
+            job = JobRepository(session).get(job_id)
+            if job is not None:
+                job.stage = stage
+                session.commit()
+    except Exception:  # noqa: BLE001 — stage 只是可观测性，不能影响主流程
+        logger.warning("更新 job stage 失败 job=%s stage=%s", job_id, stage)
+
+
+def _payload_from_result(result: AnalysisResult) -> AnalysisPayload:
+    """从已存的 AnalysisResult 重组 Vision payload（崩溃重跑时跳过 Vision）。"""
+    return AnalysisPayload(
+        summary=result.summary,
+        hook=result.hook,
+        conflict=result.conflict,
+        gameplay=result.gameplay,
+        reward=result.reward,
+        characters=list(result.characters or []),
+        environment=list(result.environment or []),
+        emotion=list(result.emotion or []),
+        tags=list(result.tags or []),
+        variant_factors=list(result.variant_factors or []),
+        creative_name=result.creative_name,
+        confidence=result.confidence,
+    )
+
+
+def _redownload_for_measure(
+    storage: StorageService, asset: CreativeAsset, tmp_dir: Path
+) -> str | None:
+    """重跑（跳过 Vision/抽帧）时视频不在本地，重新下载供级联测量裁决。"""
+    local = str(tmp_dir / f"source{Path(asset.filename).suffix.lower()}")
+    try:
+        storage.download_to(asset.storage_key, local)
+    except Exception:  # noqa: BLE001 — 下载失败回退纯文本决策
+        logger.warning("重跑视频下载失败，聚类回退文本路径 asset=%s", asset.id)
+        return None
+    return local
+
+
+def _run_analysis_pipeline(
+    asset_id: str,
+    *,
+    job_id: str | None = None,
+    raise_on_error: bool = False,
+) -> str | None:
+    """分析核心；成功返回 creative.id（供判定阶段用），失败/跳过返回 None。
+
+    ``job_id``：worker 驱动时在关键节点上报 job.stage。
+    ``raise_on_error``：worker 需要原始异常做重试分类；默认 False 保持
+    POST /analysis 的旧行为（异常吞掉、asset 置 failed）。
+    幂等：已有同 engine_version 的 AnalysisResult 时跳过抽帧/Vision/
+    embedding，直接用已存 payload 走聚类段（聚类本身幂等：variant 复用）。
+    判定（归族/合并预裁/漏网扫描/巩固）不在这里跑——由调用方
+    （run_analysis_pipeline / worker）在分析槽释放后调 _run_judge_phase
+    （F3 双槽模型），本函数只负责把 creative.id 交出去。
+    """
     settings = get_settings()
     storage = StorageService(settings)
     db = SessionLocal()
@@ -345,41 +414,61 @@ def _run_analysis_pipeline(asset_id: str) -> str | None:
 
         config = resolve_ai_config(db, settings)
         if not config.api_key:
-            _fail(
-                db,
-                asset,
+            message = (
                 "AI API Key 未配置：请在 Settings 页面填写"
                 "（支持 OpenAI / Kimi 等 OpenAI 兼容接口），"
-                "或设置环境变量 OPENAI_API_KEY 后重试",
+                "或设置环境变量 OPENAI_API_KEY 后重试"
             )
+            _fail(db, asset, message)
+            if raise_on_error:
+                raise MissingAIKeyError(message)
             return None
 
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        frames = _collect_frames(settings, storage, asset, tmp_dir)
-
-        service = AnalysisService(config)
-        payload = service.analyze_frames(frames, media_type=asset.file_type)  # type: ignore[arg-type]
-
-        analysis = AnalysisRepository(db).upsert(
-            asset.id, payload, engine_version=f"auto:{config.vision_model}"
-        )
-        tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
-
-        # Embedding 只写入（shadow）：抽象层按 embedding_backend 分发
-        # （off/provider/local），失败降级 None——attach 判定恒走文本通道。
-        # 嵌入文本 = summary + tags（E0 对照实验拍板，见 E0 报告 §5）。
-        embed_text = f"{payload.summary} {' '.join(payload.tags)}"
-        embedding: list[float] | None = embed_analysis_text(db, config, embed_text)
-        if embedding is not None:
-            AnalysisRepository(db).set_embedding(analysis, embedding)
-
-        text_signature = f"{payload.creative_name} {' '.join(payload.tags)}"
-        # 级联测量裁决用：_collect_frames 已把视频下载到本地临时目录
+        engine_version = f"auto:{config.vision_model}"
+        analysis_repo = AnalysisRepository(db)
+        existing = analysis_repo.get_by_asset(asset.id)
+        resume = existing is not None and existing.engine_version == engine_version
         local_video: str | None = None
-        if asset.file_type == "video":
-            downloaded = tmp_dir / f"source{Path(asset.filename).suffix.lower()}"
-            if downloaded.is_file():
-                local_video = str(downloaded)
+
+        if resume:
+            # Vision 已成功过（崩溃重跑/429 重试）：跳过抽帧 + Vision +
+            # embedding，用已存 payload 直接走聚类段。
+            assert existing is not None  # resume implies existing
+            payload = _payload_from_result(existing)
+            embedding: list[float] | None = existing.embedding
+            tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
+            if asset.file_type == "video":
+                local_video = _redownload_for_measure(storage, asset, tmp_dir)
+        else:
+            _update_job_stage(job_id, "frames")
+            frames = _collect_frames(settings, storage, asset, tmp_dir)
+
+            _update_job_stage(job_id, "vision")
+            service = AnalysisService(config)
+            payload = service.analyze_frames(frames, media_type=asset.file_type)  # type: ignore[arg-type]
+
+            analysis = analysis_repo.upsert(
+                asset.id, payload, engine_version=engine_version
+            )
+            tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
+
+            # Embedding 只写入（shadow）：抽象层按 embedding_backend 分发
+            # （off/provider/local），失败降级 None——attach 判定恒走文本通道。
+            # 嵌入文本 = summary + tags（E0 对照实验拍板，见 E0 报告 §5）。
+            embed_text = f"{payload.summary} {' '.join(payload.tags)}"
+            embedding = embed_analysis_text(db, config, embed_text)
+            if embedding is not None:
+                analysis_repo.set_embedding(analysis, embedding)
+
+            # 级联测量裁决用：_collect_frames 已把视频下载到本地临时目录
+            if asset.file_type == "video":
+                downloaded = tmp_dir / f"source{Path(asset.filename).suffix.lower()}"
+                if downloaded.is_file():
+                    local_video = str(downloaded)
+
+        _update_job_stage(job_id, "cluster")
+        text_signature = f"{payload.creative_name} {' '.join(payload.tags)}"
         creative, previous_creative_id = _cluster(
             db,
             asset,
@@ -414,9 +503,9 @@ def _run_analysis_pipeline(asset_id: str) -> str | None:
                 tags=tags,
             )
         rebuild_mirror(db)
-        # 判定（归族/合并预裁/漏网扫描/巩固）不在这里跑——由
-        # run_analysis_pipeline 在分析槽释放后调 _run_judge_phase（F3
-        # 双槽模型），本函数只负责把 creative.id 交出去
+        # 判定（归族/合并预裁/漏网扫描/巩固）不在这里跑——由调用方
+        # （run_analysis_pipeline / worker）在分析槽释放后调 _run_judge_phase
+        # （F3 双槽模型），本函数只负责把 creative.id 交出去
         return creative.id
     except Exception as exc:  # noqa: BLE001 — status must become "failed"
         logger.exception("分析流水线失败 asset=%s", asset_id)
@@ -433,6 +522,8 @@ def _run_analysis_pipeline(asset_id: str) -> str | None:
                 _fail(db, failed_asset, f"分析失败：{exc}{hint}")
         except Exception:  # noqa: BLE001
             logger.exception("记录失败状态时出错 asset=%s", asset_id)
+        if raise_on_error:
+            raise
     finally:
         db.close()
         shutil.rmtree(tmp_dir, ignore_errors=True)

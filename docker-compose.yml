@@ -1,5 +1,48 @@
 # 项目名不固定：继承目录名（主目录 creative-os 效果相同），
 # 避免在第二个 checkout/彩排目录跑 compose 时接管同名生产容器（彩排教训）。
+
+# api 与 worker 共享镜像/构建/环境变量/卷/依赖（worker 是独立进程跑
+# `python -m app.worker`，消费 analysis_jobs 队列，不监听端口）。
+# 锚点必须放顶层 x- 扩展位：放在 services 里会被 compose 当成真实服务，
+# 多跑一个幽灵容器（实机教训 2026-09-29）。
+x-api-common: &api-common
+  image: ghcr.io/augura-os/augura-api:latest
+  # 公开发布：up 直接拉 ghcr 预构建镜像；本地改动后开发用 up --build 重建
+  build:
+    context: .
+    dockerfile: infra/docker/api.Dockerfile
+  restart: unless-stopped
+  environment:
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-augura}:${POSTGRES_PASSWORD:-augura}@postgres:5432/${POSTGRES_DB:-augura}
+    NEO4J_URI: bolt://neo4j:7687
+    NEO4J_USER: neo4j
+    NEO4J_PASSWORD: ${NEO4J_PASSWORD:-augura123}
+    MINIO_ENDPOINT: minio:9000
+    # 业务程序用最小权限账号（init 创建）；root 只留给运维
+    MINIO_ACCESS_KEY: ${MINIO_APP_USER:-augura-app}
+    MINIO_SECRET_KEY: ${MINIO_APP_PASSWORD:-augura-app123}
+    MINIO_BUCKET: ${MINIO_BUCKET:-creative-assets}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    VISION_MODEL: ${VISION_MODEL:-gpt-4o}
+    EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    # 遥测接收端（可选；不配则一切 no-op）
+    TELEMETRY_ENDPOINT: ${TELEMETRY_ENDPOINT:-}
+    TELEMETRY_TOKEN: ${TELEMETRY_TOKEN:-}
+    UPLOAD_DIR: /app/uploads
+  volumes:
+    - ./uploads:/app/uploads
+    - ./docs:/app/docs:ro # 合并守卫裁决录（case-rulings.json），只读挂载，改裁决不用重建镜像
+    # 私有 IP 包注入（可选）：真版 ip_pack.py 放入 ip_pack/ 后取消下行注释
+    # - ./ip_pack/ip_pack.py:/app/apps/api/app/services/ip_pack.py:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    neo4j:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -76,44 +119,16 @@ services:
       MINIO_APP_PASSWORD: ${MINIO_APP_PASSWORD:-augura-app123}
 
   api:
-    image: ghcr.io/augura-os/augura-api:latest
-    # 公开发布：up 直接拉 ghcr 预构建镜像；本地改动后开发用 up --build 重建
-    build:
-      context: .
-      dockerfile: infra/docker/api.Dockerfile
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-augura}:${POSTGRES_PASSWORD:-augura}@postgres:5432/${POSTGRES_DB:-augura}
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-augura123}
-      MINIO_ENDPOINT: minio:9000
-      # 业务程序用最小权限账号（init 创建）；root 只留给运维
-      MINIO_ACCESS_KEY: ${MINIO_APP_USER:-augura-app}
-      MINIO_SECRET_KEY: ${MINIO_APP_PASSWORD:-augura-app123}
-      MINIO_BUCKET: ${MINIO_BUCKET:-creative-assets}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      VISION_MODEL: ${VISION_MODEL:-gpt-4o}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
-      # 遥测接收端（可选；不配则一切 no-op）
-      TELEMETRY_ENDPOINT: ${TELEMETRY_ENDPOINT:-}
-      TELEMETRY_TOKEN: ${TELEMETRY_TOKEN:-}
-      UPLOAD_DIR: /app/uploads
-    volumes:
-      - ./uploads:/app/uploads
-      - ./docs:/app/docs:ro # 合并守卫裁决录（case-rulings.json），只读挂载，改裁决不用重建镜像
-      # 私有 IP 包注入（可选）：真版 ip_pack.py 放入 ip_pack/ 后取消下行注释
-      # - ./ip_pack/ip_pack.py:/app/apps/api/app/services/ip_pack.py:ro
+    <<: *api-common
     ports:
       - "127.0.0.1:8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      neo4j:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+
+  worker:
+    <<: *api-common
+    # 镜像 WORKDIR=/app/apps/api 且 PYTHONPATH 已指向该目录，模块可直接跑；
+    # 迁移由 api 容器的 entrypoint（alembic upgrade head）负责，worker 起步
+    # 早于迁移完成时主循环会退避重试，无需额外编排。
+    command: ["python", "-m", "app.worker"]
 
   web:
     image: ghcr.io/augura-os/augura-web:latest

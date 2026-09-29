@@ -152,7 +152,7 @@ def aggregate_metric_events(
     report = rec.build_report(db, creatives)
     markets = resolve_creative_markets(db)
     counts: dict[tuple[str, str, str, str, str], int] = {}
-    for metrics, _action, _reasons in report.items:
+    for metrics, _verdict in report.items:
         market, confidence = markets.get(metrics.creative_id, ("", "none"))
         if confidence == "conflict":
             continue  # 市场存疑：不进基准桶

@@ -25,13 +25,13 @@ def _metrics(**overrides: object) -> object:
         spend=1000.0,
         payers=20,
         installs=500,
-        impressions=10000,
         cpp=50.0,
         roas=0.03,
         cpi=2.0,
         ipm=3.0,
         row_count=10,
         days_idle=0,
+        impressions=0,
         recent_spend=300.0,
         recent_cpp=50.0,
         variant_count=1,
@@ -53,122 +53,138 @@ def _metrics(**overrides: object) -> object:
     return metrics
 
 
-class TestRecommendRules:
-    def test_r1_no_spend_iterate(self) -> None:
-        action, reasons = recommend(_metrics(spend=0.0, payers=0, cpp=None, roas=None))
-        assert action == "ITERATE"
-        assert "投放" in reasons[0]
-
-    def test_r2_idle_and_bad_archive(self) -> None:
-        action, _ = recommend(_metrics(days_idle=20, cpp=150.0))
-        assert action == "ARCHIVE"
-
-    def test_r2_idle_but_good_not_archive(self) -> None:
-        action, reasons = recommend(_metrics(days_idle=20, cpp=50.0))
-        assert action == "ITERATE"
-        assert "无消耗" in reasons[0]
-
-    def test_r25_all_failed_derivations_archive(self) -> None:
-        action, reasons = recommend(
-            _metrics(judged_count=3, positive_count=0, derivation_count=3)
-        )
-        assert action == "ARCHIVE"
-        assert "耗尽" in reasons[0]
-
-    def test_r25_not_triggered_with_one_positive(self) -> None:
-        action, _ = recommend(
-            _metrics(judged_count=2, positive_count=1, derivation_count=2)
-        )
-        assert action != "ARCHIVE"
-
-    def test_r25_not_triggered_below_two_judged(self) -> None:
-        action, _ = recommend(
-            _metrics(judged_count=1, positive_count=0, derivation_count=1)
-        )
-        assert action != "ARCHIVE"
-
-    def test_r3_zero_payers_pause(self) -> None:
-        action, reasons = recommend(_metrics(spend=97.0, payers=0, cpp=None))
-        assert action == "PAUSE"
-        assert "0 付费" in reasons[0]
-
-    def test_r3_spend_below_threshold_not_pause(self) -> None:
-        action, _ = recommend(_metrics(spend=43.0, payers=0, cpp=None, roas=0.0))
-        assert action == "ITERATE"  # falls through to Roas rule
-
-    def test_r4_cpp_extreme_pause(self) -> None:
-        action, _ = recommend(_metrics(cpp=185.0))
-        assert action == "PAUSE"
-
-    def test_r5_cpp_high_weak_roas_pause(self) -> None:
-        action, _ = recommend(_metrics(cpp=128.49, roas=0.007, spend=2056.0))
-        assert action == "PAUSE"
-
-    def test_r6_efficient_low_spend_iterate(self) -> None:
-        action, reasons = recommend(_metrics(cpp=41.76, spend=752.0))
-        assert action == "ITERATE"
-        assert "加注" in reasons[0]
-
-    def test_r7_cpp_above_red_iterate(self) -> None:
-        action, _ = recommend(_metrics(cpp=150.0, roas=0.03))
-        assert action == "ITERATE"
-
-    def test_r8_weak_roas_iterate(self) -> None:
-        action, reasons = recommend(_metrics(cpp=88.38, roas=0.0167))
-        assert action == "ITERATE"
-        assert "Roas" in reasons[0]
-
-    def test_r9_keep(self) -> None:
-        action, reasons = recommend(_metrics(cpp=81.41, roas=0.03))
-        assert action == "KEEP"
-        assert reasons
-
-    def test_priority_archive_beats_pause(self) -> None:
-        # idle>14 AND cpp≥180 → ARCHIVE (R2) wins over PAUSE (R4)
-        action, _ = recommend(_metrics(days_idle=20, cpp=200.0))
-        assert action == "ARCHIVE"
-
-    def test_reasons_contain_numbers(self) -> None:
-        _, reasons = recommend(_metrics(cpp=41.76, spend=752.0))
-        assert "41.76" in reasons[0]
-        assert "752" in reasons[0]
-
-
 class TestDataSufficiencyGate:
     """R0 数据充分性闸门：消耗与曝光双低 → 观察期，不下方向性结论。"""
 
     def test_low_spend_low_impressions_observation(self) -> None:
         # 线上真实案例：消耗 $3.91 / 0 付费 / 低曝光，原链会落到 "成本 - 健康"
-        action, reasons = recommend(
+        verdict = recommend(
             _metrics(spend=3.91, payers=0, cpp=None, roas=0.0, impressions=833)
         )
-        assert action == "ITERATE"
-        assert "数据不足" in reasons[0]
-        assert "健康" not in reasons[0]
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "insufficient_data"
+        assert "数据不足" in verdict.reasons[0]
+        assert "健康" not in verdict.reasons[0]
 
     def test_spend_at_signal_line_enters_normal_chain(self) -> None:
         # 消耗达标（≥$10 且 ≥$50 暂停线）→ 原 R3 0 付费暂停链不受影响
-        action, reasons = recommend(
-            _metrics(spend=60.0, payers=0, cpp=None, impressions=100)
-        )
-        assert action == "PAUSE"
-        assert "0 付费" in reasons[0]
+        verdict = recommend(_metrics(spend=60.0, payers=0, cpp=None, impressions=100))
+        assert verdict.action == "PAUSE"
+        assert "0 付费" in verdict.reasons[0]
 
     def test_impressions_alone_sufficient(self) -> None:
         # 曝光达标但消耗不足 → 不进观察期，走正常规则链
-        action, reasons = recommend(
+        verdict = recommend(
             _metrics(spend=5.0, payers=0, cpp=None, roas=0.0, impressions=6000)
         )
-        assert action == "ITERATE"
-        assert "数据不足" not in reasons[0]
-        assert "Roas" in reasons[0]
+        assert verdict.action == "ITERATE"
+        assert "数据不足" not in verdict.reasons[0]
+        assert "Roas" in verdict.reasons[0]
 
     def test_observation_reason_carries_numbers(self) -> None:
-        _, reasons = recommend(
+        verdict = recommend(
             _metrics(spend=3.91, payers=0, cpp=None, roas=0.0, impressions=833)
         )
-        assert "833" in reasons[0]
-        assert "$10" in reasons[0]
+        assert verdict.params["impressions"] == 833
+        assert "833" in verdict.reasons[0]
+        assert "$10" in verdict.reasons[0]
+
+
+class TestRecommendRules:
+    def test_r1_no_spend_iterate(self) -> None:
+        verdict = recommend(_metrics(spend=0.0, payers=0, cpp=None, roas=None))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "no_delivery"
+        assert "投放" in verdict.reasons[0]
+
+    def test_r2_idle_and_bad_archive(self) -> None:
+        verdict = recommend(_metrics(days_idle=20, cpp=150.0))
+        assert verdict.action == "ARCHIVE"
+        assert verdict.reason_code == "idle_underperform"
+
+    def test_r2_idle_but_good_not_archive(self) -> None:
+        verdict = recommend(_metrics(days_idle=20, cpp=50.0))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "idle_was_healthy"
+        assert "无消耗" in verdict.reasons[0]
+
+    def test_r25_all_failed_derivations_archive(self) -> None:
+        verdict = recommend(
+            _metrics(judged_count=3, positive_count=0, derivation_count=3)
+        )
+        assert verdict.action == "ARCHIVE"
+        assert verdict.reason_code == "derivations_exhausted"
+        assert "耗尽" in verdict.reasons[0]
+
+    def test_r25_not_triggered_with_one_positive(self) -> None:
+        verdict = recommend(
+            _metrics(judged_count=2, positive_count=1, derivation_count=2)
+        )
+        assert verdict.action != "ARCHIVE"
+
+    def test_r25_not_triggered_below_two_judged(self) -> None:
+        verdict = recommend(
+            _metrics(judged_count=1, positive_count=0, derivation_count=1)
+        )
+        assert verdict.action != "ARCHIVE"
+
+    def test_r3_zero_payers_pause(self) -> None:
+        verdict = recommend(_metrics(spend=97.0, payers=0, cpp=None))
+        assert verdict.action == "PAUSE"
+        assert verdict.reason_code == "zero_payers"
+        assert "0 付费" in verdict.reasons[0]
+
+    def test_r3_spend_below_threshold_not_pause(self) -> None:
+        verdict = recommend(_metrics(spend=43.0, payers=0, cpp=None, roas=0.0))
+        assert verdict.action == "ITERATE"  # falls through to Roas rule
+
+    def test_r4_cpp_extreme_pause(self) -> None:
+        verdict = recommend(_metrics(cpp=185.0))
+        assert verdict.action == "PAUSE"
+        assert verdict.reason_code == "cpp_over_pause_line"
+
+    def test_r5_cpp_high_weak_roas_pause(self) -> None:
+        verdict = recommend(_metrics(cpp=128.49, roas=0.007, spend=2056.0))
+        assert verdict.action == "PAUSE"
+        assert verdict.reason_code == "cpp_over_red_weak_roas"
+
+    def test_r6_efficient_low_spend_iterate(self) -> None:
+        verdict = recommend(_metrics(cpp=41.76, spend=752.0))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "efficient_not_scaled"
+        assert "加注" in verdict.reasons[0]
+
+    def test_r7_cpp_above_red_iterate(self) -> None:
+        verdict = recommend(_metrics(cpp=150.0, roas=0.03))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "cpp_over_red"
+
+    def test_r8_weak_roas_iterate(self) -> None:
+        verdict = recommend(_metrics(cpp=88.38, roas=0.0167))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "d1_roas_below_green"
+        assert "Roas" in verdict.reasons[0]
+
+    def test_r9_keep(self) -> None:
+        verdict = recommend(_metrics(cpp=81.41, roas=0.03))
+        assert verdict.action == "KEEP"
+        assert verdict.reason_code == "keep_healthy"
+        assert verdict.reasons
+
+    def test_priority_archive_beats_pause(self) -> None:
+        # idle>14 AND cpp≥180 → ARCHIVE (R2) wins over PAUSE (R4)
+        verdict = recommend(_metrics(days_idle=20, cpp=200.0))
+        assert verdict.action == "ARCHIVE"
+
+    def test_reasons_contain_numbers(self) -> None:
+        verdict = recommend(_metrics(cpp=41.76, spend=752.0))
+        assert "41.76" in verdict.reasons[0]
+        assert "752" in verdict.reasons[0]
+
+    def test_params_carry_numbers_for_i18n(self) -> None:
+        verdict = recommend(_metrics(cpp=41.76, spend=752.0))
+        assert verdict.params["cpp"] == 41.76
+        assert verdict.params["spend"] == 752.0
 
 
 class TestMetricConfigGating:
@@ -187,39 +203,41 @@ class TestMetricConfigGating:
     def test_threshold_override_changes_verdict(self) -> None:
         # 默认红线 120：cpp 110 + roas 3% → KEEP；红线改 100 → ITERATE
         metrics = _metrics(cpp=110.0, roas=0.03)
-        assert recommend(metrics)[0] == "KEEP"
+        assert recommend(metrics).action == "KEEP"
         config = self._config(["cpp", "d1_roas"], cpp_red_line=100.0)
-        action, reasons = recommend(metrics, config)
-        assert action == "ITERATE"
-        assert "100" in reasons[0]
+        verdict = recommend(metrics, config)
+        assert verdict.action == "ITERATE"
+        assert "100" in verdict.reasons[0]
 
     def test_cpp_removed_from_judge_disables_cpp_rules(self) -> None:
         # cpp 185 默认 PAUSE；judge_metrics 去掉 cpp 后不再因成本判定
         metrics = _metrics(cpp=185.0, roas=0.03)
-        assert recommend(metrics)[0] == "PAUSE"
+        assert recommend(metrics).action == "PAUSE"
         config = self._config(["d1_roas"])
-        assert recommend(metrics, config)[0] == "KEEP"
+        assert recommend(metrics, config).action == "KEEP"
 
     def test_d3_roas_weak_triggers_iterate_when_enabled(self) -> None:
         metrics = _metrics(cpp=80.0, roas=0.03, d3_roas=0.02)
         # 默认不参与判定 → KEEP
-        assert recommend(metrics)[0] == "KEEP"
+        assert recommend(metrics).action == "KEEP"
         config = self._config(["cpp", "d1_roas", "d3_roas"])
-        action, reasons = recommend(metrics, config)
-        assert action == "ITERATE"
-        assert "D3 Roas" in reasons[0]
+        verdict = recommend(metrics, config)
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "d3_roas_weak"
+        assert "D3 Roas" in verdict.reasons[0]
 
     def test_d1_retention_weak_triggers_iterate_when_enabled(self) -> None:
         metrics = _metrics(cpp=80.0, roas=0.03, d1_retention=0.20)
         config = self._config(["cpp", "d1_roas", "d1_retention"])
-        action, reasons = recommend(metrics, config)
-        assert action == "ITERATE"
-        assert "次留" in reasons[0]
+        verdict = recommend(metrics, config)
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "d1_retention_weak"
+        assert "次留" in verdict.reasons[0]
 
     def test_d3_roas_above_weak_keeps(self) -> None:
         metrics = _metrics(cpp=80.0, roas=0.03, d3_roas=0.08)
         config = self._config(["cpp", "d1_roas", "d3_roas"])
-        assert recommend(metrics, config)[0] == "KEEP"
+        assert recommend(metrics, config).action == "KEEP"
 
 
 class TestSupplementaryReasons:
@@ -307,7 +325,11 @@ class TestAggregate:
         creative = _seed_creative(db_session)
         report = build_report(db_session, [creative])
         assert len(report.items) == 1
-        metrics, action, reasons = report.items[0]
+        metrics, verdict = report.items[0]
         assert metrics.creative_id == creative.id
-        assert action in ("KEEP", "ITERATE", "PAUSE", "ARCHIVE")
-        assert reasons
+        assert verdict.action in ("KEEP", "ITERATE", "PAUSE", "ARCHIVE")
+        assert verdict.reason_code
+        assert verdict.reasons
+        # priority 已计算（金额 ≥ 0，把握在 0-1 之间）
+        assert verdict.priority_dollars >= 0.0
+        assert 0.0 <= verdict.confidence <= 1.0

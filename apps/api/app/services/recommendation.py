@@ -47,6 +47,25 @@ from app.services.settings import (
 
 RecommendationAction = Literal["KEEP", "ITERATE", "PAUSE", "ARCHIVE"]
 
+
+@dataclass
+class Verdict:
+    """Structured recommendation: the rule that fired, in machine form.
+
+    ``reason_code`` + ``params`` are the i18n-ready form (frontend renders the
+    one-line decision from them); ``reasons`` is the legacy Chinese rendering,
+    byte-identical to the pre-Verdict strings so existing consumers (node
+    panel, tooltips, telemetry) keep working. ``priority_dollars`` /
+    ``confidence`` are filled by build_report via services/priority.
+    """
+
+    action: RecommendationAction
+    reason_code: str
+    params: dict[str, float | int | str | None]
+    reasons: list[str]
+    priority_dollars: float = 0.0
+    confidence: float = 0.0
+
 # 默认值 = services/settings.DEFAULT_THRESHOLDS；用户在 Settings 页改阈值后，
 # 引擎读配置（resolve_metric_config），这些模块常量仅作缺省与测试锚点。
 CPP_RED_LINE = DEFAULT_THRESHOLDS["cpp_red_line"]  # 付费成本红线（≥120 红）
@@ -85,6 +104,8 @@ class CreativeMetrics:
     recent_spend: float  # 近 7 天窗口消耗
     recent_cpp: float | None
     variant_count: int
+    # 总曝光（数据充分性闸门用；行级 impressions 列求和）
+    impressions: int = 0
     observation_partners: list[str] = field(default_factory=list)
     # 主市场（消耗最高变体的市场标签；无投放数据退回文件名前缀，再无则 ""）
     main_market: str = ""
@@ -95,8 +116,6 @@ class CreativeMetrics:
     # 可选判定指标（消耗加权；judge_metrics 开启后参与判定）
     d3_roas: float | None = None
     d1_retention: float | None = None
-    # 总曝光（数据充分性闸门用；行级 impressions 列求和）
-    impressions: int = 0
 
 
 def collect_creative_performance(
@@ -245,7 +264,7 @@ def aggregate(
 def recommend(
     metrics: CreativeMetrics,
     config: MetricConfig | None = None,
-) -> tuple[RecommendationAction, list[str]]:
+) -> Verdict:
     """Classify a creative; the first matching rule wins (R0→R9).
 
     R0 is the data-sufficiency gate (spend + impressions both below the
@@ -254,6 +273,10 @@ def recommend(
     Thresholds and the participating metrics come from ``config`` (Settings
     页配置）；未传时用默认值——与未配置的旧行为完全一致。``judge_metrics``
     门控：不在列表里的指标跳过对应判定分支。
+
+    Returns a structured ``Verdict``; ``verdict.reasons`` keeps the exact
+    legacy Chinese sentences (byte-identical), while ``reason_code`` +
+    ``params`` give the frontend an i18n-ready form.
     """
     cfg = config or _DEFAULT_METRIC_CONFIG
     t = cfg.thresholds
@@ -265,19 +288,35 @@ def recommend(
     cpp_s = f"${m.cpp:,.2f}" if m.cpp is not None else "-"
     red = t["cpp_red_line"]
 
+    def v(
+        action: RecommendationAction,
+        code: str,
+        params: dict[str, float | int | str | None],
+        reason: str,
+    ) -> Verdict:
+        return Verdict(action=action, reason_code=code, params=params, reasons=[reason])
+
     if m.spend == 0:
-        return "ITERATE", ["尚未投放或未匹配到投放数据，建议投放验证"]
+        return v("ITERATE", "no_delivery", {}, "尚未投放或未匹配到投放数据，建议投放验证")
     # R0 数据充分性闸门：消耗与曝光双低 = 小样本，不下方向性结论
     # （任一信号达标即放行，进入正常规则链）
     if (
         m.spend < t["spend_min_signal"]
         and m.impressions < t["impressions_min_signal"]
     ):
-        return "ITERATE", [
+        return v(
+            "ITERATE",
+            "insufficient_data",
+            {
+                "spend": m.spend,
+                "spend_min": t["spend_min_signal"],
+                "impressions": m.impressions,
+                "impressions_min": t["impressions_min_signal"],
+            },
             f"观察期：数据不足（消耗 {spend_s} 未达 ${t['spend_min_signal']:,.0f} "
             f"且曝光 {m.impressions:,} 未达 {int(t['impressions_min_signal']):,}），"
-            "继续投放积累数据后再判定"
-        ]
+            "继续投放积累数据后再判定",
+        )
     if (
         m.days_idle is not None
         and m.days_idle > IDLE_DAYS_ARCHIVE
@@ -286,17 +325,31 @@ def recommend(
             or (use_cpp and m.cpp is not None and m.cpp >= red)
         )
     ):
-        return "ARCHIVE", [
+        return v(
+            "ARCHIVE",
+            "idle_underperform",
+            {"days_idle": m.days_idle, "cpp": m.cpp, "red": red, "payers": m.payers},
             f"已 {m.days_idle} 天无消耗，且历史表现不达标"
-            + (f"（成本 {cpp_s} 超 ${red:.0f} 红线）" if m.payers else "（0 付费）")
-        ]
+            + (f"（成本 {cpp_s} 超 ${red:.0f} 红线）" if m.payers else "（0 付费）"),
+        )
     # R2.5 演化强信号：多次裂变全部无效 = 方向耗尽（小样本不做加权，只此一条硬规则）
     if m.judged_count >= 2 and m.positive_count == 0:
-        return "ARCHIVE", [f"裂变 {m.judged_count} 次全部无效，方向已耗尽"]
+        return v(
+            "ARCHIVE",
+            "derivations_exhausted",
+            {"judged_count": m.judged_count},
+            f"裂变 {m.judged_count} 次全部无效，方向已耗尽",
+        )
     if m.payers == 0 and m.spend >= SPEND_MIN_JUDGE:
-        return "PAUSE", [f"消耗 {spend_s} 仍 0 付费，建议暂停"]
+        return v(
+            "PAUSE", "zero_payers", {"spend": m.spend},
+            f"消耗 {spend_s} 仍 0 付费，建议暂停",
+        )
     if use_cpp and m.cpp is not None and m.cpp >= t["cpp_pause_line"]:
-        return "PAUSE", [f"付费成本 {cpp_s} 远超 ${red:.0f} 红线"]
+        return v(
+            "PAUSE", "cpp_over_pause_line", {"cpp": m.cpp, "red": red},
+            f"付费成本 {cpp_s} 远超 ${red:.0f} 红线",
+        )
     if (
         use_cpp
         and use_d1
@@ -305,49 +358,76 @@ def recommend(
         and (m.roas is not None and m.roas < t["roas_weak_line"])
         and m.spend >= SPEND_SIGNIFICANT
     ):
-        return "PAUSE", [
+        return v(
+            "PAUSE",
+            "cpp_over_red_weak_roas",
+            {
+                "cpp": m.cpp, "red": red, "roas": m.roas,
+                "roas_weak": t["roas_weak_line"], "spend": m.spend,
+            },
             f"成本 {cpp_s} 超红线且 D1 Roas {m.roas * 100:.2f}% "
-            f"低于 {t['roas_weak_line'] * 100:.0f}%，消耗已 {spend_s}"
-        ]
+            f"低于 {t['roas_weak_line'] * 100:.0f}%，消耗已 {spend_s}",
+        )
     if m.days_idle is not None and m.days_idle > IDLE_DAYS_ARCHIVE:
-        return "ITERATE", [
-            f"已 {m.days_idle} 天无消耗，历史表现达标（成本 {cpp_s}），建议复盘后重启或迭代"
-        ]
+        return v(
+            "ITERATE",
+            "idle_was_healthy",
+            {"days_idle": m.days_idle, "cpp": m.cpp},
+            f"已 {m.days_idle} 天无消耗，历史表现达标（成本 {cpp_s}），建议复盘后重启或迭代",
+        )
     if (
         use_cpp
         and m.cpp is not None
         and m.cpp < t["cpp_efficient"]
         and m.spend < SPEND_SIGNIFICANT
     ):
-        return "ITERATE", [
-            f"效率领先（成本 {cpp_s}）但消耗仅 {spend_s} 未起量，建议加注裂变"
-        ]
+        return v(
+            "ITERATE",
+            "efficient_not_scaled",
+            {"cpp": m.cpp, "spend": m.spend},
+            f"效率领先（成本 {cpp_s}）但消耗仅 {spend_s} 未起量，建议加注裂变",
+        )
     if use_cpp and m.cpp is not None and m.cpp >= red:
-        return "ITERATE", [f"付费成本 {cpp_s} 超 ${red:.0f} 红线，建议优化变体降本"]
+        return v(
+            "ITERATE", "cpp_over_red", {"cpp": m.cpp, "red": red},
+            f"付费成本 {cpp_s} 超 ${red:.0f} 红线，建议优化变体降本",
+        )
     if use_d1 and m.roas is not None and m.roas < t["roas_green_line"]:
-        return "ITERATE", [
+        return v(
+            "ITERATE",
+            "d1_roas_below_green",
+            {"cpp": m.cpp, "roas": m.roas, "roas_green": t["roas_green_line"]},
             f"成本 {cpp_s} 健康但 D1 Roas {m.roas * 100:.2f}% "
-            f"低于 {t['roas_green_line'] * 100:.0f}% 绿线，建议迭代提升回报"
-        ]
+            f"低于 {t['roas_green_line'] * 100:.0f}% 绿线，建议迭代提升回报",
+        )
     if (
         "d3_roas" in judge
         and m.d3_roas is not None
         and m.d3_roas < t["d3_roas_weak_line"]
     ):
-        return "ITERATE", [
+        return v(
+            "ITERATE",
+            "d3_roas_weak",
+            {"d3_roas": m.d3_roas, "d3_roas_weak": t["d3_roas_weak_line"]},
             f"D3 Roas {m.d3_roas * 100:.2f}% 低于 "
-            f"{t['d3_roas_weak_line'] * 100:.0f}% 弱线，后劲不足，建议迭代留存钩子"
-        ]
+            f"{t['d3_roas_weak_line'] * 100:.0f}% 弱线，后劲不足，建议迭代留存钩子",
+        )
     if (
         "d1_retention" in judge
         and m.d1_retention is not None
         and m.d1_retention < t["d1_retention_weak_line"]
     ):
-        return "ITERATE", [
+        return v(
+            "ITERATE",
+            "d1_retention_weak",
+            {"d1_retention": m.d1_retention, "d1_retention_weak": t["d1_retention_weak_line"]},
             f"次留 {m.d1_retention * 100:.1f}% 低于 "
-            f"{t['d1_retention_weak_line'] * 100:.0f}% 弱线，建议迭代前期节奏"
-        ]
-    return "KEEP", [f"成本 {cpp_s} 健康、Roas 达标、仍在投放，保持当前节奏"]
+            f"{t['d1_retention_weak_line'] * 100:.0f}% 弱线，建议迭代前期节奏",
+        )
+    return v(
+        "KEEP", "keep_healthy", {"cpp": m.cpp},
+        f"成本 {cpp_s} 健康、Roas 达标、仍在投放，保持当前节奏",
+    )
 
 
 def supplementary_reasons(metrics: CreativeMetrics) -> list[str]:
@@ -435,7 +515,8 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             threshold_cache[market] = resolve_thresholds(db, market or None)
         return threshold_cache[market]
 
-    items: list[tuple[CreativeMetrics, RecommendationAction, list[str]]] = []
+    # 第一遍：聚合 metrics + 规则判定（保留每条用的市场红线，priority 要用同口径）
+    staged: list[tuple[CreativeMetrics, Verdict, float]] = []
     for creative in creatives:
         variants = variants_by_creative.get(creative.id, [])
         rows = collect_creative_performance(
@@ -468,12 +549,35 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             main_market=main_market,
         )
         # 分市场阈值：市场覆盖 → 用户全局覆盖/品类档 → 全局默认（按市场 memo）
+        red_line = _thresholds(metrics.main_market)["cpp_red_line"]
         market_config = replace(
             metric_config,
             thresholds=_thresholds(metrics.main_market),
         )
-        action, reasons = recommend(metrics, market_config)
-        items.append((metrics, action, reasons + supplementary_reasons(metrics)))
+        verdict = recommend(metrics, market_config)
+        staged.append((metrics, verdict, red_line))
+
+    # 第二遍：货币化 priority。加注空间 proxy = min(起量线, 同家族头部消耗) − 自身消耗
+    from app.services import priority as priority_service
+
+    dna_head: dict[str, float] = {}
+    for metrics, _verdict, _red in staged:
+        if metrics.dna_code:
+            dna_head[metrics.dna_code] = max(
+                dna_head.get(metrics.dna_code, 0.0), metrics.spend
+            )
+    items: list[tuple[CreativeMetrics, Verdict]] = []
+    for metrics, verdict, red_line in staged:
+        headroom: float | None = None
+        if metrics.dna_code:
+            head = min(SPEND_SIGNIFICANT, dna_head.get(metrics.dna_code, 0.0))
+            if head > metrics.spend:
+                headroom = head - metrics.spend
+        verdict.priority_dollars, verdict.confidence = priority_service.priority_score(
+            metrics, verdict.action, red_line, scale_headroom=headroom
+        )
+        verdict.reasons = verdict.reasons + supplementary_reasons(metrics)
+        items.append((metrics, verdict))
     return ReportData(
         generated_at=datetime.now(timezone.utc),
         date_min=db.scalar(select(Performance.date).order_by(Performance.date).limit(1)),
@@ -507,4 +611,4 @@ class ReportData:
     generated_at: datetime
     date_min: date | None
     date_max: date | None
-    items: list[tuple[CreativeMetrics, RecommendationAction, list[str]]]
+    items: list[tuple[CreativeMetrics, Verdict]]

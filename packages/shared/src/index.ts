@@ -157,6 +157,9 @@ export interface RecommendationItem {
   /** 货币化优先级：≈ 每日价值金额（priority_dollars）+ 方向把握（confidence 0-1） */
   priority_dollars: number;
   confidence: number;
+  /** 结构化判定：前端按 reason_code + reason_params 渲染 i18n 决策句 */
+  reason_code: string;
+  reason_params: Record<string, number | string | null>;
 }
 
 export interface RecommendationReport {

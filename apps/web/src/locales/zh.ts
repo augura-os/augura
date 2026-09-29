@@ -84,6 +84,9 @@ export const zh: Record<string, string> = {
   "brief.tooltipBase": "消耗 ${spend} · 付费 {payers}",
   "brief.tooltipRoas": " · D1 Roas {roas}%",
   "brief.expandCollapse": "展开/折叠「{label}」",
+  "brief.summary": "{urgent} 个要处理 · {optimize} 个可优化 · {healthy} 个健康",
+  "brief.summaryRisk": " · 约 ${dollars}/天 风险",
+  "brief.priority": "≈ ${dollars}/天 · {pct}% 把握",
 
   // --- 待审核收件箱 ---
   "inbox.review": "待审核",

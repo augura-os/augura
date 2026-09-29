@@ -84,6 +84,9 @@ export const en: Record<string, string> = {
   "brief.tooltipBase": "Spend ${spend} · Payers {payers}",
   "brief.tooltipRoas": " · D1 ROAS {roas}%",
   "brief.expandCollapse": "Expand / collapse \"{label}\"",
+  "brief.summary": "{urgent} to act on · {optimize} to optimize · {healthy} healthy",
+  "brief.summaryRisk": " · ≈ ${dollars}/day at risk",
+  "brief.priority": "≈ ${dollars}/day · {pct}% confidence",
 
   // --- review inbox ---
   "inbox.review": "Review",

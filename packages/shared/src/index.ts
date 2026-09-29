@@ -154,6 +154,9 @@ export interface RecommendationItem {
   score_breakdown: Record<string, number>;
   /** 生命周期：active / watch / archived */
   lifecycle_state: string;
+  /** 货币化优先级：≈ 每日价值金额（priority_dollars）+ 方向把握（confidence 0-1） */
+  priority_dollars: number;
+  confidence: number;
 }
 
 export interface RecommendationReport {

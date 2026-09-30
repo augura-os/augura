@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { RecommendationItem } from "@shared";
 import { en } from "../../locales/en";
 import { zh } from "../../locales/zh";
-import { briefLine, formatDollars, priorityText } from "./briefLine";
+import { setLang } from "../../lib/i18n";
+import {
+  briefBitLine,
+  briefLine,
+  formatDollars,
+  priorityText,
+  recommendationLines,
+} from "./briefLine";
 
 const tZh = (key: string) => zh[key] ?? key;
 const tEn = (key: string) => en[key] ?? key;
@@ -94,6 +101,88 @@ describe("briefLine", () => {
     expect(briefLine(item, tEn)).toBe(
       "Observation: spend $3 below $10, 800 impressions below 5,000 — keep gathering data",
     );
+  });
+
+  it("renders insufficient_payers in both locales", () => {
+    const item = makeItem({
+      reason_code: "insufficient_payers",
+      reason_params: { spend: 400, payers: 2 },
+    });
+    expect(briefLine(item, tZh)).toBe(
+      "消耗 $400 仅 2 个付费，样本太薄，继续投放积累后再判定",
+    );
+    expect(briefLine(item, tEn)).toBe(
+      "$400 spent but only 2 payers — sample too thin, keep gathering data",
+    );
+  });
+
+  it("renders factor_exhausted with a localized factor label", () => {
+    const item = makeItem({
+      reason_code: "factor_exhausted",
+      reason_params: { factor: "remake", judged_count: 3 },
+    });
+    expect(briefLine(item, tZh)).toBe("「重制」维度 3 次裂变全无效，建议换维度迭代");
+    expect(briefLine(item, tEn)).toBe(
+      "3 iterations on Remake, all ineffective — try another dimension",
+    );
+  });
+
+  it("renders derivations_exhausted with a localized factor list", () => {
+    const item = makeItem({
+      action: "ARCHIVE",
+      reason_code: "derivations_exhausted",
+      reason_params: { judged_count: 4, factors: "aspect-ratio,remake" },
+    });
+    setLang("zh");
+    try {
+      expect(briefLine(item, tZh)).toBe("裂变 4 次全部无效（画幅、重制），方向已耗尽");
+    } finally {
+      setLang("en");
+    }
+    expect(briefLine(item, tEn)).toBe(
+      "4 iterations, all ineffective (Aspect ratio, Remake) — direction exhausted",
+    );
+  });
+});
+
+describe("briefBitLine", () => {
+  it("renders trend_cpp_up from the en template", () => {
+    const line = briefBitLine(
+      { code: "trend_cpp_up", params: { recent_cpp: 140, cpp: 100 } },
+      tEn,
+    );
+    expect(line).toBe("CPP rising over the last 7 days ($140.00 vs $100.00 overall)");
+  });
+
+  it("returns null when the code has no template", () => {
+    expect(briefBitLine({ code: "future_code", params: {} }, tZh)).toBeNull();
+  });
+});
+
+describe("recommendationLines", () => {
+  it("renders evidence from reason_bits via templates", () => {
+    const item = makeItem({
+      reason_code: "keep_healthy",
+      reasons: ["成本健康", "旧补充理由"],
+      reason_bits: [{ code: "variants_compare", params: { variant_count: 3 } }],
+    });
+    expect(recommendationLines(item, tEn)).toEqual([
+      "CPP healthy, ROAS on target — keep the pace",
+      "3 variants available for cross-comparison",
+    ]);
+  });
+
+  it("falls back to legacy reasons when a bit template is missing", () => {
+    const item = makeItem({
+      reasons: ["成本健康", "旧补充理由"],
+      reason_bits: [{ code: "future_code", params: {} }],
+    });
+    expect(recommendationLines(item, tEn)).toEqual(["成本健康", "旧补充理由"]);
+  });
+
+  it("falls back to legacy reasons when reason_bits is empty", () => {
+    const item = makeItem({ reasons: ["成本健康", "旧补充理由"] });
+    expect(recommendationLines(item, tZh)).toEqual(["成本健康", "旧补充理由"]);
   });
 });
 

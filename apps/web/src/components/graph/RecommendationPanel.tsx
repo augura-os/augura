@@ -5,7 +5,7 @@ import { useRecommendations } from "../../hooks/useRecommendations";
 import { useMetricConfig } from "../../hooks/useMetricConfig";
 import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
-import { briefLine, formatDollars, priorityText } from "./briefLine";
+import { briefLine, formatDollars, priorityText, recommendationLines } from "./briefLine";
 
 type Group = "urgent" | "optimize" | "healthy";
 
@@ -81,11 +81,12 @@ function ItemCard({
   const t = useT();
   const [showEvidence, setShowEvidence] = useState(false);
   const priority = priorityText(item, t);
-  const evidence = item.reasons.slice(1);
+  const lines = recommendationLines(item, t);
+  const evidence = lines.slice(1);
   const cpp = fmtCpp(item, cppRedLine, t("brief.zeroPayers"));
   const tooltip = [
     item.creative_name,
-    ...item.reasons,
+    ...lines,
     t("brief.tooltipBase")
       .replace("{spend}", item.metrics.spend.toLocaleString())
       .replace("{payers}", String(item.metrics.payers)) +

@@ -24,6 +24,7 @@ from app.schemas.common import Envelope, ok
 from app.schemas.creative import LifecycleUpdate
 from app.schemas.recommendation import (
     MetricsOut,
+    ReasonBitModel,
     RecommendationItem,
     RecommendationReport,
 )
@@ -75,6 +76,10 @@ def creative_recommendations(db: DbDep) -> Envelope[RecommendationReport]:
             reasons=verdict.reasons,
             reason_code=verdict.reason_code,
             reason_params=verdict.params,
+            reason_bits=[
+                ReasonBitModel(code=bit.code, params=bit.params)
+                for bit in verdict.supplementary
+            ],
             priority_dollars=verdict.priority_dollars,
             confidence=verdict.confidence,
             metrics=MetricsOut(

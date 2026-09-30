@@ -26,6 +26,8 @@ The above is used for: product iteration, industry research, and model training.
 
 You can turn off the Creative Genome Program at any time on the tool's Settings page. After you opt out we stop collecting the above, but anonymized aggregate data already produced before opt-out remains usable.
 
+**Default / self-hosted installs:** `TELEMETRY_ENDPOINT` is empty by default, which means nothing is ever sent — events only sit in a local queue on your machine and are never transmitted. The Genome toggle above (and the operational reports in §1.1a) only produce network traffic once an endpoint is configured. Everything the telemetry pipeline is allowed to emit is whitelisted in `apps/api/telemetry/allowlist.py` — fully auditable.
+
 ### 1.2 Content you submit voluntarily
 
 When you actively submit content through the tool's feedback, correction, or annotation features, **you grant us the right to use that content for product improvement, feature optimization, and model training**. Please do not include anything you do not wish to share with us in such submissions.

@@ -82,3 +82,7 @@ class AnalysisResult(TimestampMixin, Base):
     engine_version: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     # Embedding of ``summary + tags`` (§5.1).
     embedding: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
+    # 产出 embedding 的模型 id（行级 provenance，格式同 settings 表
+    # embedding_model_active，如 "local:BAAI/bge-small-zh-v1.5"）；
+    # NULL = 未知模型（存量行）或无向量——戳与向量同生同灭。
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)

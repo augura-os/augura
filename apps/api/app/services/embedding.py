@@ -28,6 +28,9 @@ shadow 语义：本层只负责"产出向量 + 写入存储"，attach 判定永�
 - 模型一致性：settings 记 ``embedding_model_active``；切换模型/后端时
   存量向量全部失效清空（不同模型维度/语义空间不互通，混存即毒）。
   失效后的批量回填见 ``backfill_embeddings``（POST /admin/backfill-embeddings）。
+- 行级 provenance：三处存储列各配一个 ``embedding_model`` 戳（值 =
+  写入时的 active id），导出/遥测/排障可确认单条向量出自哪个模型；
+  戳与向量同生同灭（向量清空时戳同步清 None）。
 """
 
 from __future__ import annotations
@@ -93,12 +96,25 @@ def active_embedding_model_id(backend: str, config: AIConfig) -> str | None:
     return None
 
 
+def recorded_embedding_model_id(db: Session) -> str | None:
+    """settings 表记录的当前生效模型 id = 全部存量向量的 provenance。
+
+    一致性机制（``_ensure_model_consistency``）保证库内向量同源于该模型，
+    因此行级 ``embedding_model`` 戳直接取这里的记录值；不需要 AIConfig，
+    拿不到 config 的写入点（recompute / 人工编辑）也能盖戳。未产出过
+    向量时为 None。
+    """
+    return SettingsRepository(db).get(EMBEDDING_MODEL_ACTIVE_SETTING)
+
+
 def invalidate_embeddings(db: Session) -> None:
-    """清空全部存量向量（模型切换时调用）：三处存储列 + 计数归零。"""
-    db.execute(update(AnalysisResult).values(embedding=None))
-    db.execute(update(CreativeVariant).values(embedding=None))
+    """清空全部存量向量（模型切换时调用）：三处存储列 + 计数归零 + 清戳。"""
+    db.execute(update(AnalysisResult).values(embedding=None, embedding_model=None))
+    db.execute(update(CreativeVariant).values(embedding=None, embedding_model=None))
     db.execute(
-        update(Creative).values(representative_embedding=None, embedding_count=0)
+        update(Creative).values(
+            representative_embedding=None, embedding_count=0, embedding_model=None
+        )
     )
     db.flush()
 
@@ -234,6 +250,9 @@ def recompute_creative_representative(db: Session, creative: Creative) -> None:
     vectors = [v.embedding for v in variants if v.embedding]
     creative.representative_embedding = mean_embeddings(vectors)
     creative.embedding_count = len(vectors) if vectors else 0
+    # 代表向量是成员向量均值，一致性机制保证与成员同源 → 戳取当前记录的
+    # active id；vectors 为空时向量清 None，戳同步清 None（同生同灭）
+    creative.embedding_model = recorded_embedding_model_id(db) if vectors else None
     db.flush()
 
 
@@ -297,11 +316,13 @@ def backfill_embeddings(
                 stats.skipped.append(analysis.id)
                 continue
             analysis.embedding = vector
+            analysis.embedding_model = active_id
             stats.analyses += 1
             variant = variant_repo.get_by_asset(analysis.asset_id)
             if variant is None:
                 continue
             variant.embedding = vector
+            variant.embedding_model = active_id
             stats.variants += 1
             creative = db.get(Creative, variant.creative_id)
             if creative is not None:

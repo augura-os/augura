@@ -13,6 +13,7 @@ from app.models.project import Project
 from app.models.ruling import SplitRuling
 from app.models.setting import Setting
 from app.models.tag import Tag, TagAssignment
+from app.models.verdict_snapshot import VerdictSnapshot
 
 __all__ = [
     "AnalysisJob",
@@ -34,5 +35,6 @@ __all__ = [
     "TagAssignment",
     "TimestampMixin",
     "VariantDerivation",
+    "VerdictSnapshot",
     "new_uuid",
 ]

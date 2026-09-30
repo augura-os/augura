@@ -55,8 +55,12 @@ class AnalysisRepository:
         self.db.flush()
         return result
 
-    def set_embedding(self, result: AnalysisResult, embedding: list[float]) -> None:
+    def set_embedding(
+        self, result: AnalysisResult, embedding: list[float], *, model: str | None = None
+    ) -> None:
+        # 戳与向量同生同灭：写向量必须同时盖模型戳（行级 provenance）
         result.embedding = embedding
+        result.embedding_model = model
         self.db.flush()
 
     def delete_for_asset(self, asset_id: str) -> None:

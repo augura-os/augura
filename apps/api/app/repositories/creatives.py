@@ -21,12 +21,14 @@ class CreativeRepository:
         representative_embedding: list[float] | None = None,
         representative_text: str = "",
         embedding_count: int = 0,
+        embedding_model: str | None = None,
     ) -> Creative:
         creative = Creative(
             name=name,
             representative_embedding=representative_embedding,
             representative_text=representative_text,
             embedding_count=embedding_count,
+            embedding_model=embedding_model,
         )
         self.db.add(creative)
         self.db.flush()
@@ -64,12 +66,14 @@ class VariantRepository:
         creative_id: str,
         name: str,
         embedding: list[float] | None = None,
+        embedding_model: str | None = None,
     ) -> CreativeVariant:
         variant = CreativeVariant(
             asset_id=asset_id,
             creative_id=creative_id,
             name=name,
             embedding=embedding,
+            embedding_model=embedding_model,
         )
         self.db.add(variant)
         self.db.flush()

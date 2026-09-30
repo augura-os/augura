@@ -5,3 +5,7 @@
 **/dist
 **/__pycache__
 .env
+# 本机 uploads 与模型缓存（可再生成；91MB fastembed blob 会让 build context 失败）
+uploads/
+apps/api/uploads/
+**/.cache

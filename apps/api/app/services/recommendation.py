@@ -49,20 +49,36 @@ RecommendationAction = Literal["KEEP", "ITERATE", "PAUSE", "ARCHIVE"]
 
 
 @dataclass
+class ReasonBit:
+    """Context-only supplementary reason in i18n-ready form (code + params).
+
+    The frontend renders ``brief.bit.<code>`` templates and falls back to the
+    legacy Chinese rendering (``render_reason_zh``) when a template is missing
+    (old data / future codes).
+    """
+
+    code: str
+    params: dict[str, float | int | str]
+
+
+@dataclass
 class Verdict:
     """Structured recommendation: the rule that fired, in machine form.
 
     ``reason_code`` + ``params`` are the i18n-ready form (frontend renders the
     one-line decision from them); ``reasons`` is the legacy Chinese rendering,
     byte-identical to the pre-Verdict strings so existing consumers (node
-    panel, tooltips, telemetry) keep working. ``priority_dollars`` /
-    ``confidence`` are filled by build_report via services/priority.
+    panel, tooltips, telemetry) keep working. ``supplementary`` carries the
+    context-only reasons in ReasonBit form (its Chinese rendering is also
+    appended to ``reasons``). ``priority_dollars`` / ``confidence`` are filled
+    by build_report via services/priority.
     """
 
     action: RecommendationAction
     reason_code: str
     params: dict[str, float | int | str | None]
     reasons: list[str]
+    supplementary: list[ReasonBit] = field(default_factory=list)
     priority_dollars: float = 0.0
     confidence: float = 0.0
 
@@ -73,7 +89,8 @@ CPP_PAUSE_LINE = DEFAULT_THRESHOLDS["cpp_pause_line"]  # 红线 1.5 倍，直接
 CPP_EFFICIENT = DEFAULT_THRESHOLDS["cpp_efficient"]  # 效率领先线
 ROAS_GREEN_LINE = DEFAULT_THRESHOLDS["roas_green_line"]  # D1 Roas 绿线（>2% 绿）
 ROAS_WEAK_LINE = DEFAULT_THRESHOLDS["roas_weak_line"]
-SPEND_MIN_JUDGE = 50.0  # 低于此消耗不做暂停判定
+SPEND_MIN_JUDGE = 50.0  # 低于此消耗不做暂停/ROAS/留存判定
+PAYERS_MIN_JUDGE = 3  # 付费样本 <3 时 CPP 波动是倍数级，不做 CPP 类方向性判定
 SPEND_SIGNIFICANT = 1000.0  # 起量线
 IDLE_DAYS_ARCHIVE = 14
 RECENT_WINDOW_DAYS = 7
@@ -113,6 +130,9 @@ class CreativeMetrics:
     derivation_count: int = 0
     judged_count: int = 0
     positive_count: int = 0
+    # 维度级耗尽：(factor, 该维度已判定数)；某维度 judged≥2 且 positive==0 即耗尽。
+    # factor="unknown" 只进 judged/positive 总数，不算维度（build_report 分组统计）
+    exhausted_factors: tuple[tuple[str, int], ...] = ()
     # 可选判定指标（消耗加权；judge_metrics 开启后参与判定）
     d3_roas: float | None = None
     d1_retention: float | None = None
@@ -208,6 +228,7 @@ def aggregate(
     derivation_count: int = 0,
     judged_count: int = 0,
     positive_count: int = 0,
+    exhausted_factors: tuple[tuple[str, int], ...] = (),
     main_market: str = "",
 ) -> CreativeMetrics:
     spend = sum(row.spend for row in rows)
@@ -257,6 +278,7 @@ def aggregate(
         derivation_count=derivation_count,
         judged_count=judged_count,
         positive_count=positive_count,
+        exhausted_factors=exhausted_factors,
         main_market=main_market,
     )
 
@@ -265,10 +287,14 @@ def recommend(
     metrics: CreativeMetrics,
     config: MetricConfig | None = None,
 ) -> Verdict:
-    """Classify a creative; the first matching rule wins (R0→R9).
+    """Classify a creative; the first matching rule in the cascade wins.
 
-    R0 is the data-sufficiency gate (spend + impressions both below the
-    signal lines → observation period, no directional verdict).
+    Cascade order: delivery check → R0 data-sufficiency gate → idle /
+    factor-exhaustion strong signals → cost (CPP) rules → ROAS / retention
+    rules → KEEP fallback. CPP rules additionally require ≥ PAYERS_MIN_JUDGE
+    payers and ROAS / retention rules require ≥ SPEND_MIN_JUDGE spend — thin
+    samples are not judgable and degrade to ``insufficient_payers`` / fall
+    through instead.
 
     Thresholds and the participating metrics come from ``config`` (Settings
     页配置）；未传时用默认值——与未配置的旧行为完全一致。``judge_metrics``
@@ -332,20 +358,45 @@ def recommend(
             f"已 {m.days_idle} 天无消耗，且历史表现不达标"
             + (f"（成本 {cpp_s} 超 ${red:.0f} 红线）" if m.payers else "（0 付费）"),
         )
-    # R2.5 演化强信号：多次裂变全部无效 = 方向耗尽（小样本不做加权，只此一条硬规则）
-    if m.judged_count >= 2 and m.positive_count == 0:
+    # R2.5 演化强信号：维度级耗尽（factor="unknown" 只进总数、不算维度）。
+    # ≥2 个维度耗尽 = 方向耗尽（ARCHIVE）；恰好 1 个 = 换维度迭代（ITERATE）
+    if len(m.exhausted_factors) >= 2:
+        factors = [factor for factor, _judged in m.exhausted_factors]
         return v(
             "ARCHIVE",
             "derivations_exhausted",
-            {"judged_count": m.judged_count},
+            {"judged_count": m.judged_count, "factors": ",".join(factors)},
             f"裂变 {m.judged_count} 次全部无效，方向已耗尽",
+        )
+    if m.exhausted_factors:
+        factor, factor_judged = m.exhausted_factors[0]
+        return v(
+            "ITERATE",
+            "factor_exhausted",
+            {"factor": factor, "judged_count": factor_judged},
+            f"「{factor}」方向裂变 {factor_judged} 次全部无效，建议换维度迭代",
         )
     if m.payers == 0 and m.spend >= SPEND_MIN_JUDGE:
         return v(
             "PAUSE", "zero_payers", {"spend": m.spend},
             f"消耗 {spend_s} 仍 0 付费，建议暂停",
         )
-    if use_cpp and m.cpp is not None and m.cpp >= t["cpp_pause_line"]:
+    # 薄付费样本：消耗够判定线但付费 <PAYERS_MIN_JUDGE 时 CPP 波动是倍数级，
+    # 不做方向性判定（防薄样本漏到 keep_healthy 显示"成本健康"）
+    if m.spend >= SPEND_MIN_JUDGE and 0 < m.payers < PAYERS_MIN_JUDGE:
+        return v(
+            "ITERATE",
+            "insufficient_payers",
+            {"spend": m.spend, "payers": m.payers},
+            f"消耗 {spend_s} 但仅 {m.payers} 个付费，样本太薄"
+            f"（<{PAYERS_MIN_JUDGE}），继续投放积累数据后再判定",
+        )
+    if (
+        use_cpp
+        and m.payers >= PAYERS_MIN_JUDGE
+        and m.cpp is not None
+        and m.cpp >= t["cpp_pause_line"]
+    ):
         return v(
             "PAUSE", "cpp_over_pause_line", {"cpp": m.cpp, "red": red},
             f"付费成本 {cpp_s} 远超 ${red:.0f} 红线",
@@ -353,6 +404,7 @@ def recommend(
     if (
         use_cpp
         and use_d1
+        and m.payers >= PAYERS_MIN_JUDGE
         and m.cpp is not None
         and m.cpp >= red
         and (m.roas is not None and m.roas < t["roas_weak_line"])
@@ -377,6 +429,7 @@ def recommend(
         )
     if (
         use_cpp
+        and m.payers >= PAYERS_MIN_JUDGE
         and m.cpp is not None
         and m.cpp < t["cpp_efficient"]
         and m.spend < SPEND_SIGNIFICANT
@@ -387,12 +440,22 @@ def recommend(
             {"cpp": m.cpp, "spend": m.spend},
             f"效率领先（成本 {cpp_s}）但消耗仅 {spend_s} 未起量，建议加注裂变",
         )
-    if use_cpp and m.cpp is not None and m.cpp >= red:
+    if (
+        use_cpp
+        and m.payers >= PAYERS_MIN_JUDGE
+        and m.cpp is not None
+        and m.cpp >= red
+    ):
         return v(
             "ITERATE", "cpp_over_red", {"cpp": m.cpp, "red": red},
             f"付费成本 {cpp_s} 超 ${red:.0f} 红线，建议优化变体降本",
         )
-    if use_d1 and m.roas is not None and m.roas < t["roas_green_line"]:
+    if (
+        use_d1
+        and m.spend >= SPEND_MIN_JUDGE
+        and m.roas is not None
+        and m.roas < t["roas_green_line"]
+    ):
         return v(
             "ITERATE",
             "d1_roas_below_green",
@@ -402,6 +465,7 @@ def recommend(
         )
     if (
         "d3_roas" in judge
+        and m.spend >= SPEND_MIN_JUDGE
         and m.d3_roas is not None
         and m.d3_roas < t["d3_roas_weak_line"]
     ):
@@ -414,6 +478,7 @@ def recommend(
         )
     if (
         "d1_retention" in judge
+        and m.spend >= SPEND_MIN_JUDGE
         and m.d1_retention is not None
         and m.d1_retention < t["d1_retention_weak_line"]
     ):
@@ -430,9 +495,13 @@ def recommend(
     )
 
 
-def supplementary_reasons(metrics: CreativeMetrics) -> list[str]:
-    """Context-only reasons that never change the classification."""
-    reasons: list[str] = []
+def supplementary_reasons(metrics: CreativeMetrics) -> list[ReasonBit]:
+    """Context-only reasons that never change the classification.
+
+    Returns i18n-ready ReasonBits; ``render_reason_zh`` renders each into the
+    legacy Chinese sentence for old consumers (node panel tooltips, telemetry).
+    """
+    bits: list[ReasonBit] = []
     m = metrics
     if (
         m.cpp is not None
@@ -440,23 +509,52 @@ def supplementary_reasons(metrics: CreativeMetrics) -> list[str]:
         and m.cpp > 0
         and abs(m.recent_cpp - m.cpp) / m.cpp >= TREND_THRESHOLD
     ):
-        direction = "上升" if m.recent_cpp > m.cpp else "下降"
-        reasons.append(
-            f"近 {RECENT_WINDOW_DAYS} 天付费成本{direction}"
-            f"（${m.recent_cpp:,.2f} vs 整体 ${m.cpp:,.2f}）"
+        bits.append(
+            ReasonBit(
+                code="trend_cpp_up" if m.recent_cpp > m.cpp else "trend_cpp_down",
+                params={"recent_cpp": m.recent_cpp, "cpp": m.cpp},
+            )
         )
     if m.variant_count >= 2:
-        reasons.append(f"{m.variant_count} 个 Variant 数据可横向对比")
+        bits.append(
+            ReasonBit(code="variants_compare", params={"variant_count": m.variant_count})
+        )
     if m.judged_count >= 1 and m.positive_count > 0:
-        reasons.append(
-            f"裂变 {m.judged_count} 次、{m.positive_count} 次有效，演化历史健康"
+        bits.append(
+            ReasonBit(
+                code="derivation_healthy",
+                params={
+                    "judged_count": m.judged_count,
+                    "positive_count": m.positive_count,
+                },
+            )
         )
     pending = m.derivation_count - m.judged_count
     if pending > 0:
-        reasons.append(f"{pending} 次裂变待判定")
+        bits.append(ReasonBit(code="derivation_pending", params={"pending": pending}))
     for partner in m.observation_partners:
-        reasons.append(f"与 {partner} 互为观察对，建议对比数据后结案")
-    return reasons
+        bits.append(ReasonBit(code="observation_partner", params={"partner": partner}))
+    return bits
+
+
+def render_reason_zh(bit: ReasonBit) -> str:
+    """Legacy Chinese rendering of a ReasonBit (kept for old consumers)."""
+    p = bit.params
+    if bit.code in ("trend_cpp_up", "trend_cpp_down"):
+        direction = "上升" if bit.code == "trend_cpp_up" else "下降"
+        return (
+            f"近 {RECENT_WINDOW_DAYS} 天付费成本{direction}"
+            f"（${float(p['recent_cpp']):,.2f} vs 整体 ${float(p['cpp']):,.2f}）"
+        )
+    if bit.code == "variants_compare":
+        return f"{p['variant_count']} 个 Variant 数据可横向对比"
+    if bit.code == "derivation_healthy":
+        return f"裂变 {p['judged_count']} 次、{p['positive_count']} 次有效，演化历史健康"
+    if bit.code == "derivation_pending":
+        return f"{p['pending']} 次裂变待判定"
+    if bit.code == "observation_partner":
+        return f"与 {p['partner']} 互为观察对，建议对比数据后结案"
+    return bit.code
 
 
 def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
@@ -529,6 +627,22 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
         dna = dnas.get(creative.dna_id) if creative.dna_id else None
         derivations = derivations_by_creative.get(creative.id, [])
         judged = [d for d in derivations if d.verdict != "pending"]
+        # 维度级耗尽统计：factor="unknown" 只进 judged/positive 总数，不算维度
+        factor_stats: dict[str, list[int]] = {}  # factor → [judged, positive]
+        for derivation in judged:
+            if derivation.factor == "unknown":
+                continue
+            stats = factor_stats.setdefault(derivation.factor, [0, 0])
+            stats[0] += 1
+            if derivation.verdict == "positive":
+                stats[1] += 1
+        exhausted_factors = tuple(
+            sorted(
+                (factor, stats[0])
+                for factor, stats in factor_stats.items()
+                if stats[0] >= 2 and stats[1] == 0
+            )
+        )
         # 主市场 = 消耗最高变体的市场；无投放数据退回变体文件名前缀
         main_market = market_stats.main_market_for_rows(rows, prefixes)
         if not main_market:
@@ -546,6 +660,7 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             derivation_count=len(derivations),
             judged_count=len(judged),
             positive_count=sum(1 for d in judged if d.verdict == "positive"),
+            exhausted_factors=exhausted_factors,
             main_market=main_market,
         )
         # 分市场阈值：市场覆盖 → 用户全局覆盖/品类档 → 全局默认（按市场 memo）
@@ -576,7 +691,10 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
         verdict.priority_dollars, verdict.confidence = priority_service.priority_score(
             metrics, verdict.action, red_line, scale_headroom=headroom
         )
-        verdict.reasons = verdict.reasons + supplementary_reasons(metrics)
+        verdict.supplementary = supplementary_reasons(metrics)
+        verdict.reasons = verdict.reasons + [
+            render_reason_zh(bit) for bit in verdict.supplementary
+        ]
         items.append((metrics, verdict))
     return ReportData(
         generated_at=datetime.now(timezone.utc),

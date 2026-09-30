@@ -31,6 +31,13 @@ class MetricsOut(BaseModel):
     d1_retention: float | None = None
 
 
+class ReasonBitModel(BaseModel):
+    """Context-only supplementary reason, i18n-ready (brief.bit.<code> 模板）。"""
+
+    code: str
+    params: dict[str, float | int | str | None] = Field(default_factory=dict)
+
+
 class RecommendationItem(BaseModel):
     creative_id: str
     creative_name: str
@@ -42,6 +49,9 @@ class RecommendationItem(BaseModel):
     # 渲染 i18n 决策句；reasons 保留旧中文文案兼容
     reason_code: str = ""
     reason_params: dict[str, float | int | str | None] = Field(default_factory=dict)
+    # 补充理由（只读上下文，不影响判定）：前端按 brief.bit.<code> 渲染，
+    # 缺模板/为空时回退 reasons[1:] 中文文案（兼容旧数据）
+    reason_bits: list[ReasonBitModel] = Field(default_factory=list)
     # 货币化 priority（services/priority）：这条建议的日度金额 + 后验把握
     priority_dollars: float = 0.0
     confidence: float = 0.0

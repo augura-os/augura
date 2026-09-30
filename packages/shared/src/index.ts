@@ -141,6 +141,12 @@ export interface RecommendationMetrics {
   d1_retention?: number | null;
 }
 
+/** 结构化补充理由（brief.bit.<code> 模板渲染；缺模板时回退中文 reasons） */
+export interface ReasonBit {
+  code: string;
+  params: Record<string, number | string | null>;
+}
+
 export interface RecommendationItem {
   creative_id: string;
   creative_name: string;
@@ -160,6 +166,8 @@ export interface RecommendationItem {
   /** 结构化判定：前端按 reason_code + reason_params 渲染 i18n 决策句 */
   reason_code: string;
   reason_params: Record<string, number | string | null>;
+  /** 补充理由（只读上下文）；空或缺模板时前端回退 reasons[1:] 中文文案 */
+  reason_bits?: ReasonBit[];
 }
 
 export interface RecommendationReport {

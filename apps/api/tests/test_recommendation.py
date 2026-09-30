@@ -6,12 +6,19 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.models import Creative, CreativeAsset, CreativeVariant, Performance
+from app.models import (
+    Creative,
+    CreativeAsset,
+    CreativeVariant,
+    Performance,
+    VariantDerivation,
+)
 from app.services.recommendation import (
     aggregate,
     build_report,
     collect_creative_performance,
     recommend,
+    render_reason_zh,
     supplementary_reasons,
 )
 
@@ -39,6 +46,7 @@ def _metrics(**overrides: object) -> object:
         derivation_count=0,
         judged_count=0,
         positive_count=0,
+        exhausted_factors=(),
         d3_roas=None,
         d1_retention=None,
     )
@@ -73,13 +81,13 @@ class TestDataSufficiencyGate:
         assert "0 付费" in verdict.reasons[0]
 
     def test_impressions_alone_sufficient(self) -> None:
-        # 曝光达标但消耗不足 → 不进观察期，走正常规则链
+        # 曝光达标但消耗不足 → 不进观察期，走正常规则链；
+        # 消耗 < $50 时 ROAS 规则不触发（样本不足），落到 KEEP
         verdict = recommend(
             _metrics(spend=5.0, payers=0, cpp=None, roas=0.0, impressions=6000)
         )
-        assert verdict.action == "ITERATE"
+        assert verdict.action == "KEEP"
         assert "数据不足" not in verdict.reasons[0]
-        assert "Roas" in verdict.reasons[0]
 
     def test_observation_reason_carries_numbers(self) -> None:
         verdict = recommend(
@@ -108,26 +116,6 @@ class TestRecommendRules:
         assert verdict.reason_code == "idle_was_healthy"
         assert "无消耗" in verdict.reasons[0]
 
-    def test_r25_all_failed_derivations_archive(self) -> None:
-        verdict = recommend(
-            _metrics(judged_count=3, positive_count=0, derivation_count=3)
-        )
-        assert verdict.action == "ARCHIVE"
-        assert verdict.reason_code == "derivations_exhausted"
-        assert "耗尽" in verdict.reasons[0]
-
-    def test_r25_not_triggered_with_one_positive(self) -> None:
-        verdict = recommend(
-            _metrics(judged_count=2, positive_count=1, derivation_count=2)
-        )
-        assert verdict.action != "ARCHIVE"
-
-    def test_r25_not_triggered_below_two_judged(self) -> None:
-        verdict = recommend(
-            _metrics(judged_count=1, positive_count=0, derivation_count=1)
-        )
-        assert verdict.action != "ARCHIVE"
-
     def test_r3_zero_payers_pause(self) -> None:
         verdict = recommend(_metrics(spend=97.0, payers=0, cpp=None))
         assert verdict.action == "PAUSE"
@@ -135,8 +123,10 @@ class TestRecommendRules:
         assert "0 付费" in verdict.reasons[0]
 
     def test_r3_spend_below_threshold_not_pause(self) -> None:
+        # 消耗 < $50：0 付费不暂停，ROAS 规则同样不触发（样本不足）→ KEEP
         verdict = recommend(_metrics(spend=43.0, payers=0, cpp=None, roas=0.0))
-        assert verdict.action == "ITERATE"  # falls through to Roas rule
+        assert verdict.action == "KEEP"
+        assert verdict.reason_code == "keep_healthy"
 
     def test_r4_cpp_extreme_pause(self) -> None:
         verdict = recommend(_metrics(cpp=185.0))
@@ -240,28 +230,130 @@ class TestMetricConfigGating:
         assert recommend(metrics, config).action == "KEEP"
 
 
+class TestPayerSufficiency:
+    """样本充分性：CPP 类判定需付费 ≥3；ROAS/留存判定需消耗 ≥$50。"""
+
+    def test_thin_payers_not_paused(self) -> None:
+        # 消耗 $400 / 2 付费 → CPP $200 超暂停线，但样本太薄，不判 PAUSE
+        verdict = recommend(_metrics(spend=400.0, payers=2, cpp=200.0, roas=0.03))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "insufficient_payers"
+        assert verdict.params["spend"] == 400.0
+        assert verdict.params["payers"] == 2
+        assert "样本太薄" in verdict.reasons[0]
+
+    def test_three_payers_over_pause_line_still_pause(self) -> None:
+        verdict = recommend(_metrics(spend=600.0, payers=3, cpp=200.0, roas=0.03))
+        assert verdict.action == "PAUSE"
+        assert verdict.reason_code == "cpp_over_pause_line"
+
+    def test_thin_payers_block_cpp_over_red(self) -> None:
+        verdict = recommend(_metrics(spend=300.0, payers=1, cpp=300.0, roas=0.03))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "insufficient_payers"
+
+    def test_low_spend_skips_roas_and_retention_rules(self) -> None:
+        from app.services.settings import DEFAULT_THRESHOLDS, MetricConfig
+
+        config = MetricConfig(
+            profile=[],
+            judge_metrics=["cpp", "d1_roas", "d3_roas", "d1_retention"],
+            thresholds=dict(DEFAULT_THRESHOLDS),
+        )
+        metrics = _metrics(
+            spend=40.0, payers=5, cpp=80.0,
+            roas=0.0, d3_roas=0.01, d1_retention=0.10,
+        )
+        verdict = recommend(metrics, config)
+        assert verdict.action == "KEEP"
+        assert verdict.reason_code == "keep_healthy"
+
+    def test_r0_gate_unchanged_by_thin_payers(self) -> None:
+        # R0 总闸门不变：消耗/曝光双低仍进观察期，与付费人数无关
+        verdict = recommend(
+            _metrics(spend=3.91, payers=2, cpp=None, roas=0.0, impressions=833)
+        )
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "insufficient_data"
+
+
+class TestFactorExhaustion:
+    """维度级裂变耗尽：≥2 维度 → ARCHIVE；恰好 1 维度 → ITERATE 换维度。"""
+
+    def test_two_dimensions_exhausted_archive(self) -> None:
+        verdict = recommend(
+            _metrics(
+                judged_count=4, positive_count=0, derivation_count=4,
+                exhausted_factors=(("aspect-ratio", 2), ("remake", 2)),
+            )
+        )
+        assert verdict.action == "ARCHIVE"
+        assert verdict.reason_code == "derivations_exhausted"
+        assert verdict.params["judged_count"] == 4
+        assert verdict.params["factors"] == "aspect-ratio,remake"
+        assert "耗尽" in verdict.reasons[0]
+
+    def test_single_dimension_exhausted_iterate(self) -> None:
+        verdict = recommend(
+            _metrics(
+                judged_count=3, positive_count=0, derivation_count=3,
+                exhausted_factors=(("remake", 3),),
+            )
+        )
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "factor_exhausted"
+        assert verdict.params["factor"] == "remake"
+        assert verdict.params["judged_count"] == 3
+        assert "换维度" in verdict.reasons[0]
+
+    def test_no_exhausted_dimension_falls_through(self) -> None:
+        verdict = recommend(
+            _metrics(judged_count=2, positive_count=1, derivation_count=2)
+        )
+        assert verdict.action != "ARCHIVE"
+        assert verdict.reason_code not in ("derivations_exhausted", "factor_exhausted")
+
+
 class TestSupplementaryReasons:
-    def test_trend_reason(self) -> None:
-        reasons = supplementary_reasons(_metrics(cpp=100.0, recent_cpp=140.0))
-        assert any("上升" in reason for reason in reasons)
+    def test_trend_bit(self) -> None:
+        bits = supplementary_reasons(_metrics(cpp=100.0, recent_cpp=140.0))
+        assert [bit.code for bit in bits] == ["trend_cpp_up"]
+        assert bits[0].params == {"recent_cpp": 140.0, "cpp": 100.0}
+        assert "上升" in render_reason_zh(bits[0])
+
+    def test_trend_down_bit(self) -> None:
+        bits = supplementary_reasons(_metrics(cpp=100.0, recent_cpp=60.0))
+        assert [bit.code for bit in bits] == ["trend_cpp_down"]
+        assert "下降" in render_reason_zh(bits[0])
 
     def test_no_trend_within_threshold(self) -> None:
         assert supplementary_reasons(_metrics(cpp=100.0, recent_cpp=110.0)) == []
 
-    def test_variant_and_partner_reasons(self) -> None:
-        reasons = supplementary_reasons(
+    def test_variant_and_partner_bits(self) -> None:
+        bits = supplementary_reasons(
             _metrics(cpp=None, recent_cpp=None, variant_count=2,
                      observation_partners=["other-creative"])
         )
-        assert any("Variant" in reason for reason in reasons)
-        assert any("观察对" in reason for reason in reasons)
+        codes = [bit.code for bit in bits]
+        assert "variants_compare" in codes
+        assert "observation_partner" in codes
+        partner_bit = bits[codes.index("observation_partner")]
+        assert partner_bit.params["partner"] == "other-creative"
+        legacy = [render_reason_zh(bit) for bit in bits]
+        assert any("Variant" in reason for reason in legacy)
+        assert any("观察对" in reason for reason in legacy)
 
-    def test_evolution_reasons(self) -> None:
-        reasons = supplementary_reasons(
+    def test_evolution_bits(self) -> None:
+        bits = supplementary_reasons(
             _metrics(derivation_count=5, judged_count=3, positive_count=2)
         )
-        assert any("3 次、2 次有效" in reason for reason in reasons)
-        assert any("2 次裂变待判定" in reason for reason in reasons)
+        codes = [bit.code for bit in bits]
+        assert "derivation_healthy" in codes
+        assert "derivation_pending" in codes
+        healthy = bits[codes.index("derivation_healthy")]
+        assert healthy.params == {"judged_count": 3, "positive_count": 2}
+        pending = bits[codes.index("derivation_pending")]
+        assert pending.params == {"pending": 2}
 
 
 def _seed_creative(db: Session) -> Creative:
@@ -333,3 +425,114 @@ class TestAggregate:
         # priority 已计算（金额 ≥ 0，把握在 0-1 之间）
         assert verdict.priority_dollars >= 0.0
         assert 0.0 <= verdict.confidence <= 1.0
+
+
+def _seed_derivation_creative(
+    db: Session, derivations: list[tuple[str, str]]
+) -> Creative:
+    """Seed a creative with ``len(derivations) + 1`` variants chained by
+    (factor, verdict) derivation edges, plus one healthy performance row
+    (spend ≥ $50, payers ≥ 3) so only the exhaustion rules can fire."""
+    creative = Creative(id=str(uuid.uuid4()), name="KS_FAKE-derivation-creative")
+    db.add(creative)
+    variants: list[CreativeVariant] = []
+    for index in range(len(derivations) + 1):
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()),
+            filename=f"KS_FAKE-260930-chain-{index}-variant-name-long-enough.mp4",
+            file_type="video",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        db.add(asset)
+        db.flush()
+        variant = CreativeVariant(
+            id=str(uuid.uuid4()),
+            creative_id=creative.id,
+            asset_id=asset.id,
+            name=f"v{index}",
+        )
+        db.add(variant)
+        variants.append(variant)
+    db.flush()
+    for index, (factor, verdict_value) in enumerate(derivations):
+        db.add(
+            VariantDerivation(
+                id=str(uuid.uuid4()),
+                source_variant_id=variants[index].id,
+                target_variant_id=variants[index + 1].id,
+                factor=factor,
+                verdict=verdict_value,
+            )
+        )
+    db.add(
+        Performance(
+            id=str(uuid.uuid4()),
+            creative_name="ks_fake-260930-chain-0-variant-name-long-enough",
+            date=date(2026, 7, 18),
+            spend=100.0,
+            installs=50,
+            raw={"付费人数": 5, "D1_Roas": 0.05},
+        )
+    )
+    db.flush()
+    return creative
+
+
+class TestBuildReportExhaustion:
+    """build_report 的维度分组统计：unknown 只进总数，维度耗尽映射到规则。"""
+
+    def test_unknown_factor_not_counted_as_dimension(
+        self, db_session: Session
+    ) -> None:
+        creative = _seed_derivation_creative(
+            db_session, [("unknown", "negative"), ("unknown", "negative")]
+        )
+        report = build_report(db_session, [creative])
+        metrics, verdict = report.items[0]
+        # unknown 进 judged/positive 总数，但不构成维度 → 不触发耗尽规则
+        assert metrics.judged_count == 2
+        assert metrics.positive_count == 0
+        assert metrics.exhausted_factors == ()
+        assert verdict.action != "ARCHIVE"
+        assert verdict.reason_code != "derivations_exhausted"
+
+    def test_single_exhausted_dimension_iterates(self, db_session: Session) -> None:
+        creative = _seed_derivation_creative(
+            db_session, [("remake", "negative"), ("remake", "negative")]
+        )
+        report = build_report(db_session, [creative])
+        metrics, verdict = report.items[0]
+        assert metrics.exhausted_factors == (("remake", 2),)
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "factor_exhausted"
+        assert verdict.params["factor"] == "remake"
+        assert verdict.params["judged_count"] == 2
+
+    def test_two_exhausted_dimensions_archive(self, db_session: Session) -> None:
+        creative = _seed_derivation_creative(
+            db_session,
+            [
+                ("aspect-ratio", "negative"),
+                ("aspect-ratio", "negative"),
+                ("remake", "negative"),
+                ("remake", "negative"),
+            ],
+        )
+        report = build_report(db_session, [creative])
+        _metrics_out, verdict = report.items[0]
+        assert verdict.action == "ARCHIVE"
+        assert verdict.reason_code == "derivations_exhausted"
+        assert verdict.params["factors"] == "aspect-ratio,remake"
+
+    def test_build_report_fills_supplementary_bits(self, db_session: Session) -> None:
+        creative = _seed_derivation_creative(
+            db_session, [("remake", "positive"), ("remake", "pending")]
+        )
+        report = build_report(db_session, [creative])
+        _metrics_out, verdict = report.items[0]
+        codes = [bit.code for bit in verdict.supplementary]
+        assert "variants_compare" in codes  # 2 个变体可横向对比
+        assert "derivation_healthy" in codes
+        assert "derivation_pending" in codes
+        # 旧中文 reasons 与 supplementary 一一对应（旧消费方兼容）
+        assert len(verdict.reasons) == 1 + len(verdict.supplementary)

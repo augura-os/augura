@@ -786,3 +786,181 @@ class TestBackfillRoute:
         db_session.expire_all()
         assert analysis.embedding == [1.0, 0.0]
         assert creative.representative_embedding == [1.0, 0.0]
+
+
+class TestEmbeddingModelProvenance:
+    """行级 embedding_model 戳（迁移 0017）：写入盖戳、失效清戳、戳随向量亡。
+
+    戳的取值 = settings 表 embedding_model_active 的记录值（一致性机制
+    保证库内向量同源于该模型），格式如 "local:BAAI/bge-small-zh-v1.5"。
+    """
+
+    def test_three_tables_have_embedding_model_column(
+        self, db_session: Session
+    ) -> None:
+        from sqlalchemy import inspect
+
+        inspector = inspect(db_session.get_bind())
+        for table in ("analysis_results", "creative_variants", "creatives"):
+            columns = {col["name"] for col in inspector.get_columns(table)}
+            assert "embedding_model" in columns
+
+    def test_backfill_stamps_all_three_stores(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        creative = Creative(id=str(uuid.uuid4()), name="c1")
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="c1.mp4", file_type="video",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        variant = CreativeVariant(
+            id=str(uuid.uuid4()), creative_id=creative.id, asset_id=asset.id,
+            name="c1",
+        )
+        db_session.add_all([creative, asset, variant])
+        db_session.flush()
+        analysis = AnalysisResult(
+            id=str(uuid.uuid4()), asset_id=asset.id, summary="摘要", tags=["tag1"],
+        )
+        db_session.add(analysis)
+        db_session.flush()
+
+        _set_backend(db_session, "local")
+        _fake_local_embedder(monkeypatch, [0.0, 2.0])
+        stats = backfill_embeddings(db_session, _CONFIG_NO_EMBED)
+        assert stats.analyses == 1
+
+        db_session.expire_all()
+        stamp = f"local:{LOCAL_EMBEDDING_MODEL}"
+        assert analysis.embedding_model == stamp
+        assert variant.embedding_model == stamp
+        assert creative.embedding_model == stamp
+
+    def test_invalidate_clears_stamps(self, db_session: Session) -> None:
+        creative, variant, analysis = _seed_vectors(db_session)
+        stamp = f"local:{LOCAL_EMBEDDING_MODEL}"
+        creative.embedding_model = stamp
+        variant.embedding_model = stamp
+        analysis.embedding_model = stamp
+        db_session.flush()
+
+        invalidate_embeddings(db_session)
+        db_session.expire_all()
+        assert creative.embedding_model is None
+        assert variant.embedding_model is None
+        assert analysis.embedding_model is None
+
+    def test_recompute_stamps_creative_from_record(
+        self, db_session: Session
+    ) -> None:
+        # 成员有向量 + settings 已记录 active id → 代表向量盖同记录戳
+        creative, _variant, _analysis = _seed_vectors(db_session)
+        SettingsRepository(db_session).set(
+            EMBEDDING_MODEL_ACTIVE_SETTING, "provider:text-embedding-3-small"
+        )
+        db_session.flush()
+        creative.embedding_model = None
+        recompute_creative_representative(db_session, creative)
+        assert creative.embedding_model == "provider:text-embedding-3-small"
+
+    def test_recompute_without_vectors_clears_stamp(
+        self, db_session: Session
+    ) -> None:
+        creative = Creative(
+            id=str(uuid.uuid4()), name="c",
+            representative_embedding=[1.0], embedding_count=1,
+            embedding_model=f"local:{LOCAL_EMBEDDING_MODEL}",
+        )
+        db_session.add(creative)
+        db_session.flush()
+        recompute_creative_representative(db_session, creative)
+        assert creative.representative_embedding is None
+        assert creative.embedding_model is None
+
+    def test_cluster_new_creative_and_variant_stamped(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 文本召回零候选 → 新建族：族与 variant 的戳随向量一起写入
+        monkeypatch.setattr(
+            pipeline,
+            "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [],
+        )
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="new.png", file_type="image",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        db_session.add(asset)
+        db_session.flush()
+
+        from app.services.pipeline import _cluster
+
+        stamp = f"local:{LOCAL_EMBEDDING_MODEL}"
+        creative, _ = _cluster(
+            db_session, asset, "brand-new", [1.0, 0.0], "brand-new",
+            embedding_model=stamp,
+            settings=Settings(upload_dir="/tmp"),
+        )
+        assert creative.embedding_model == stamp
+        variant = VariantRepository(db_session).get_by_asset(asset.id)
+        assert variant is not None
+        assert variant.embedding_model == stamp
+
+    def test_cluster_attach_updates_stamp(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        creative = Creative(
+            id=str(uuid.uuid4()), name="island",
+            representative_embedding=[1.0, 0.0], embedding_count=1,
+        )
+        db_session.add(creative)
+        db_session.flush()
+        monkeypatch.setattr(
+            pipeline,
+            "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [(creative, 0.50)][:limit],
+        )
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="new.png", file_type="image",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        db_session.add(asset)
+        db_session.flush()
+
+        from app.services.pipeline import _cluster
+
+        stamp = f"local:{LOCAL_EMBEDDING_MODEL}"
+        attached, _ = _cluster(
+            db_session, asset, "island", [0.0, 1.0], "island",
+            embedding_model=stamp,
+            settings=Settings(upload_dir="/tmp"),
+        )
+        assert attached.embedding_model == stamp
+
+    def test_cluster_without_vector_clears_stamp(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 戳与向量同生同灭：向量为 None 时即使传入戳也不落库
+        monkeypatch.setattr(
+            pipeline,
+            "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [],
+        )
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="new.png", file_type="image",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        db_session.add(asset)
+        db_session.flush()
+
+        from app.services.pipeline import _cluster
+
+        creative, _ = _cluster(
+            db_session, asset, "no-vector", None, "no-vector",
+            embedding_model=f"local:{LOCAL_EMBEDDING_MODEL}",
+            settings=Settings(upload_dir="/tmp"),
+        )
+        assert creative.embedding_model is None
+        variant = VariantRepository(db_session).get_by_asset(asset.id)
+        assert variant is not None
+        assert variant.embedding_model is None

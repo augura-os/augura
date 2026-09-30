@@ -21,6 +21,9 @@ class Creative(TimestampMixin, Base):
     representative_embedding: Mapped[list[float] | None] = mapped_column(
         JSONB, nullable=True
     )
+    # 产出代表向量的模型 id（行级 provenance，同 AnalysisResult.embedding_model；
+    # 代表向量是成员向量均值，模型一致性机制保证与成员同源）。NULL = 未知模型或无向量。
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # 实际参与过 representative_embedding 均值的向量条数（P0-3 口径：
     # 不是全部 variant 数——历史无向量 variant 不参与均值）。
     embedding_count: Mapped[int] = mapped_column(
@@ -63,3 +66,6 @@ class CreativeVariant(TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     embedding: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
+    # 产出 embedding 的模型 id（行级 provenance，同 AnalysisResult.embedding_model）；
+    # NULL = 未知模型（存量行）或无向量——戳与向量同生同灭。
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)

@@ -28,6 +28,7 @@ from app.schemas.derivation import (
 from app.services import graph_sync
 from app.services.derivation_review import run_derivation_review
 from app.services.evolution import variant_brief
+from app.services.judge_suggestions import delete_suggestion
 
 router = APIRouter()
 
@@ -174,6 +175,12 @@ def delete_derivation(
         new_value="",
     )
     repo.delete(derivation)
+    # 边已删，它的因子复核建议（derivation-factor，left_id=边 id）同步
+    # 清掉——收件箱只进不出，不能留幽灵条目；只动这一个 kind，其他
+    # subject 的建议不受影响
+    delete_suggestion(
+        db, kind="derivation-factor", left_id=derivation_id, right_id=None
+    )
     db.commit()
     try:
         graph_sync.get_graph_repository(settings).unlink_derivation(

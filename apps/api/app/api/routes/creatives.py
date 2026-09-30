@@ -1,10 +1,12 @@
 """Creative-level routes: GET /creatives/{id}/performance,
-GET /creatives/recommendations.
+GET /creatives/recommendations, POST /creatives/recommendations/refresh.
 
 Aggregates the Facebook delivery rows of every asset under a creative so
 the graph creative panel can compare directions (spend-weighted metrics
-are computed client-side from the row list). The recommendations endpoint
-runs the rule-based engine (services/recommendation) over every creative.
+are computed client-side from the row list). The recommendations report
+is assembled read-only by services/daily_brief; the stateful part (score
+→ lifecycle auto-transition) lives in POST .../refresh and the delivery
+data import path, never in a GET.
 """
 
 from __future__ import annotations
@@ -22,12 +24,8 @@ from app.repositories.creatives import CreativeRepository
 from app.schemas.asset import PerformanceOut
 from app.schemas.common import Envelope, ok
 from app.schemas.creative import LifecycleUpdate
-from app.schemas.recommendation import (
-    MetricsOut,
-    ReasonBitModel,
-    RecommendationItem,
-    RecommendationReport,
-)
+from app.schemas.recommendation import RecommendationReport
+from app.services import daily_brief
 from app.services import lifecycle as lifecycle_service
 from app.services import recommendation as rec
 
@@ -47,79 +45,26 @@ def recent_creative_ids(db: DbDep, hours: int = 48) -> Envelope[list[str]]:
     response_model=Envelope[RecommendationReport],
 )
 def creative_recommendations(db: DbDep) -> Envelope[RecommendationReport]:
-    creatives = CreativeRepository(db).list_all()
-    report = rec.build_report(db, creatives)
+    """推荐报表（纯读组装，见 services/daily_brief.recommendation_report）。
 
-    # Creative Score + 生命周期自动流转（计算即得；active→watch 自动标记，
-    # 建议归档只进收件箱——见 services/lifecycle / review.archive_suggestion_items）
-    from app.services import review as review_service
-    from app.services.settings import resolve_score_config
+    Creative Score 为展示用计算值；lifecycle_state 读 DB 当前值——
+    active→watch 自动流转只走 POST .../refresh 与投放数据导入路径。
+    """
+    return ok(daily_brief.recommendation_report(db))
 
-    config = resolve_score_config(db)
-    scores = review_service.creative_scores(db, report)
-    lifecycle_service.apply_auto_transitions(
-        db,
-        {cid: (score.total, metrics.days_idle) for cid, (score, metrics) in scores.items()},
-        config,
-    )
+
+@router.post("/creatives/recommendations/refresh", response_model=Envelope[dict])
+def refresh_recommendations(db: DbDep) -> Envelope[dict]:
+    """有状态刷新：重算 creative score、自动流转 lifecycle_state 并落决策快照。
+
+    active→watch 自动标记（edit_logs 逐条留痕）；verdict 判定快照按
+    content_hash 去重落库（services/verdict_snapshots）；建议归档只进
+    收件箱（见 services/lifecycle / review.archive_suggestion_items）。
+    看板拉取前 fire 一次，保持"打开即见最新 watch 状态"的体验。
+    """
+    stats = daily_brief.refresh_creative_states(db)
     db.commit()
-    states = {c.id: c.lifecycle_state for c in creatives}
-
-    order = {"KEEP": 0, "ITERATE": 1, "PAUSE": 2, "ARCHIVE": 3}
-    items = [
-        RecommendationItem(
-            creative_id=metrics.creative_id,
-            creative_name=metrics.creative_name,
-            dna_code=metrics.dna_code,
-            dna_name=metrics.dna_name,
-            action=verdict.action,
-            reasons=verdict.reasons,
-            reason_code=verdict.reason_code,
-            reason_params=verdict.params,
-            reason_bits=[
-                ReasonBitModel(code=bit.code, params=bit.params)
-                for bit in verdict.supplementary
-            ],
-            priority_dollars=verdict.priority_dollars,
-            confidence=verdict.confidence,
-            metrics=MetricsOut(
-                spend=metrics.spend,
-                payers=metrics.payers,
-                installs=metrics.installs,
-                cpp=metrics.cpp,
-                roas=metrics.roas,
-                cpi=metrics.cpi,
-                ipm=metrics.ipm,
-                days_idle=metrics.days_idle,
-                recent_spend=metrics.recent_spend,
-                recent_cpp=metrics.recent_cpp,
-                variant_count=metrics.variant_count,
-                derivation_count=metrics.derivation_count,
-                judged_count=metrics.judged_count,
-                positive_count=metrics.positive_count,
-                d3_roas=metrics.d3_roas,
-                d1_retention=metrics.d1_retention,
-            ),
-            score=scores[metrics.creative_id][0].total,
-            score_breakdown={
-                "performance": scores[metrics.creative_id][0].performance,
-                "freshness": scores[metrics.creative_id][0].freshness,
-                "evolution": scores[metrics.creative_id][0].evolution,
-                "confidence": scores[metrics.creative_id][0].confidence,
-            },
-            lifecycle_state=states.get(metrics.creative_id, "active"),
-        )
-        for metrics, verdict in report.items
-    ]
-    items.sort(key=lambda item: (order[item.action], -item.priority_dollars))
-    return ok(
-        RecommendationReport(
-            generated_at=report.generated_at,
-            date_min=report.date_min,
-            date_max=report.date_max,
-            items=items,
-        )
-    )
+    return ok(stats, message="已刷新")
 
 
 @router.get(

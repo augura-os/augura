@@ -77,6 +77,17 @@ export function fetchRecommendations(): Promise<RecommendationReport> {
   return unwrap(apiClient.get<ApiResponse<RecommendationReport>>("/creatives/recommendations"));
 }
 
+/** POST /creatives/recommendations/refresh — 有状态刷新：重算 creative score
+ *  并自动流转 lifecycle_state（active→watch），返回流转统计。
+ *  GET 已纯读化，看板拉取前先 fire 一次保持"打开即见最新 watch 状态"。 */
+export function refreshRecommendations(): Promise<{ transitions: number }> {
+  return unwrap(
+    apiClient.post<ApiResponse<{ transitions: number }>>(
+      "/creatives/recommendations/refresh",
+    ),
+  );
+}
+
 export function fetchReviewQueue(): Promise<ReviewQueue> {
   return unwrap(apiClient.get<ApiResponse<ReviewQueue>>("/review/queue"));
 }

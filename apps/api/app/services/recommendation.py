@@ -8,12 +8,16 @@ rows matched to the creative's assets.
 Thresholds follow the UA team's documented metric priorities
 (AGENTS.md §6): payer cost red line $120, D1 ROAS green line 2%.
 All thresholds are module constants so tuning stays a one-line change.
+
+规则链本体在 services/recommendation_rules（rule registry，first match
+wins）；KPI 聚合口径在 services/metrics（两者经本模块再导出，既有 import
+路径不受影响）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Literal, Sequence
 
 from sqlalchemy import select
@@ -30,7 +34,7 @@ from app.models import (
 from app.repositories.assets import AssetRepository
 from app.repositories.creatives import VariantRepository
 from app.repositories.performance import PerformanceRepository
-from app.services.excel import metrics_from_raw
+from app.services import recommendation_rules
 from app.services.matching import (
     PerformanceIndex,
     index_performances,
@@ -38,6 +42,8 @@ from app.services.matching import (
     matches,
     normalize,
 )
+from app.services.metrics import RECENT_WINDOW_DAYS, aggregate
+from app.services.recommendation_rules import RULES, RuleContext
 from app.services.settings import (
     DEFAULT_JUDGE_METRICS,
     DEFAULT_THRESHOLDS,
@@ -89,11 +95,12 @@ CPP_PAUSE_LINE = DEFAULT_THRESHOLDS["cpp_pause_line"]  # 红线 1.5 倍，直接
 CPP_EFFICIENT = DEFAULT_THRESHOLDS["cpp_efficient"]  # 效率领先线
 ROAS_GREEN_LINE = DEFAULT_THRESHOLDS["roas_green_line"]  # D1 Roas 绿线（>2% 绿）
 ROAS_WEAK_LINE = DEFAULT_THRESHOLDS["roas_weak_line"]
-SPEND_MIN_JUDGE = 50.0  # 低于此消耗不做暂停/ROAS/留存判定
-PAYERS_MIN_JUDGE = 3  # 付费样本 <3 时 CPP 波动是倍数级，不做 CPP 类方向性判定
-SPEND_SIGNIFICANT = 1000.0  # 起量线
-IDLE_DAYS_ARCHIVE = 14
-RECENT_WINDOW_DAYS = 7
+# 判定常量随规则迁入 recommendation_rules（单一事实源）；此处再导出，
+# 旧 import 路径（recommendation.SPEND_MIN_JUDGE 等）与调参入口不变。
+SPEND_MIN_JUDGE = recommendation_rules.SPEND_MIN_JUDGE
+PAYERS_MIN_JUDGE = recommendation_rules.PAYERS_MIN_JUDGE
+SPEND_SIGNIFICANT = recommendation_rules.SPEND_SIGNIFICANT
+IDLE_DAYS_ARCHIVE = recommendation_rules.IDLE_DAYS_ARCHIVE
 TREND_THRESHOLD = 0.30  # 近 7 天 cpp 偏离整体 ±30% 记为趋势
 
 _DEFAULT_METRIC_CONFIG = MetricConfig(
@@ -203,98 +210,16 @@ def collect_creative_performance(
     return rows
 
 
-def _weighted_metric(rows: Sequence[Performance], key: str) -> float | None:
-    """Spend-weighted average of a raw metric (d1_roas / cpi / ipm)."""
-    total_spend = 0.0
-    weighted = 0.0
-    for row in rows:
-        value = metrics_from_raw(row.raw or {}).get(key)
-        if value is None:
-            continue
-        total_spend += row.spend
-        weighted += row.spend * float(value)
-    return weighted / total_spend if total_spend else None
-
-
-def aggregate(
-    creative: Creative,
-    dna_code: str | None,
-    dna_name: str | None,
-    rows: Sequence[Performance],
-    *,
-    max_date: date | None,
-    variant_count: int,
-    observation_partners: Sequence[str] = (),
-    derivation_count: int = 0,
-    judged_count: int = 0,
-    positive_count: int = 0,
-    exhausted_factors: tuple[tuple[str, int], ...] = (),
-    main_market: str = "",
-) -> CreativeMetrics:
-    spend = sum(row.spend for row in rows)
-    installs = sum(row.installs for row in rows)
-    impressions = sum(row.impressions for row in rows)
-    payers = 0
-    for row in rows:
-        value = metrics_from_raw(row.raw or {})["payers"]
-        payers += int(value or 0)
-    cpp = spend / payers if payers else None
-
-    last_date = max((row.date for row in rows if row.date is not None), default=None)
-    days_idle = (max_date - last_date).days if (max_date and last_date) else None
-
-    recent_spend = 0.0
-    recent_payers = 0
-    if max_date is not None:
-        window_start = max_date - timedelta(days=RECENT_WINDOW_DAYS)
-        for row in rows:
-            if row.date is not None and row.date > window_start:
-                recent_spend += row.spend
-                value = metrics_from_raw(row.raw or {})["payers"]
-                recent_payers += int(value or 0)
-    recent_cpp = recent_spend / recent_payers if recent_payers else None
-
-    return CreativeMetrics(
-        creative_id=creative.id,
-        creative_name=creative.name,
-        dna_code=dna_code,
-        dna_name=dna_name,
-        spend=spend,
-        payers=payers,
-        installs=installs,
-        impressions=impressions,
-        cpp=cpp,
-        roas=_weighted_metric(rows, "d1_roas"),
-        cpi=spend / installs if installs else None,
-        ipm=_weighted_metric(rows, "ipm"),
-        d3_roas=_weighted_metric(rows, "d3_roas"),
-        d1_retention=_weighted_metric(rows, "d1_retention"),
-        row_count=len(rows),
-        days_idle=days_idle,
-        recent_spend=recent_spend,
-        recent_cpp=recent_cpp,
-        variant_count=variant_count,
-        observation_partners=list(observation_partners),
-        derivation_count=derivation_count,
-        judged_count=judged_count,
-        positive_count=positive_count,
-        exhausted_factors=exhausted_factors,
-        main_market=main_market,
-    )
-
-
 def recommend(
     metrics: CreativeMetrics,
     config: MetricConfig | None = None,
 ) -> Verdict:
-    """Classify a creative; the first matching rule in the cascade wins.
+    """Classify a creative; the first matching rule in the registry wins.
 
-    Cascade order: delivery check → R0 data-sufficiency gate → idle /
-    factor-exhaustion strong signals → cost (CPP) rules → ROAS / retention
-    rules → KEEP fallback. CPP rules additionally require ≥ PAYERS_MIN_JUDGE
-    payers and ROAS / retention rules require ≥ SPEND_MIN_JUDGE spend — thin
-    samples are not judgable and degrade to ``insufficient_payers`` / fall
-    through instead.
+    规则链已迁到 services/recommendation_rules.RULES（first match wins，
+    优先级 = 列表位置）：投放检查 → R0 数据充分性闸门 → 闲置 / 维度耗尽
+    强信号 → 成本（CPP）规则 → ROAS / 留存规则 → KEEP 兜底（RULES 最后一
+    条）。本函数只负责构建 RuleContext 并逐条 evaluate。
 
     Thresholds and the participating metrics come from ``config`` (Settings
     页配置）；未传时用默认值——与未配置的旧行为完全一致。``judge_metrics``
@@ -305,193 +230,23 @@ def recommend(
     ``params`` give the frontend an i18n-ready form.
     """
     cfg = config or _DEFAULT_METRIC_CONFIG
-    t = cfg.thresholds
     judge = set(cfg.judge_metrics)
-    use_cpp = "cpp" in judge
-    use_d1 = "d1_roas" in judge
-    m = metrics
-    spend_s = f"${m.spend:,.0f}"
-    cpp_s = f"${m.cpp:,.2f}" if m.cpp is not None else "-"
-    red = t["cpp_red_line"]
-
-    def v(
-        action: RecommendationAction,
-        code: str,
-        params: dict[str, float | int | str | None],
-        reason: str,
-    ) -> Verdict:
-        return Verdict(action=action, reason_code=code, params=params, reasons=[reason])
-
-    if m.spend == 0:
-        return v("ITERATE", "no_delivery", {}, "尚未投放或未匹配到投放数据，建议投放验证")
-    # R0 数据充分性闸门：消耗与曝光双低 = 小样本，不下方向性结论
-    # （任一信号达标即放行，进入正常规则链）
-    if (
-        m.spend < t["spend_min_signal"]
-        and m.impressions < t["impressions_min_signal"]
-    ):
-        return v(
-            "ITERATE",
-            "insufficient_data",
-            {
-                "spend": m.spend,
-                "spend_min": t["spend_min_signal"],
-                "impressions": m.impressions,
-                "impressions_min": t["impressions_min_signal"],
-            },
-            f"观察期：数据不足（消耗 {spend_s} 未达 ${t['spend_min_signal']:,.0f} "
-            f"且曝光 {m.impressions:,} 未达 {int(t['impressions_min_signal']):,}），"
-            "继续投放积累数据后再判定",
-        )
-    if (
-        m.days_idle is not None
-        and m.days_idle > IDLE_DAYS_ARCHIVE
-        and (
-            m.payers == 0
-            or (use_cpp and m.cpp is not None and m.cpp >= red)
-        )
-    ):
-        return v(
-            "ARCHIVE",
-            "idle_underperform",
-            {"days_idle": m.days_idle, "cpp": m.cpp, "red": red, "payers": m.payers},
-            f"已 {m.days_idle} 天无消耗，且历史表现不达标"
-            + (f"（成本 {cpp_s} 超 ${red:.0f} 红线）" if m.payers else "（0 付费）"),
-        )
-    # R2.5 演化强信号：维度级耗尽（factor="unknown" 只进总数、不算维度）。
-    # ≥2 个维度耗尽 = 方向耗尽（ARCHIVE）；恰好 1 个 = 换维度迭代（ITERATE）
-    if len(m.exhausted_factors) >= 2:
-        factors = [factor for factor, _judged in m.exhausted_factors]
-        return v(
-            "ARCHIVE",
-            "derivations_exhausted",
-            {"judged_count": m.judged_count, "factors": ",".join(factors)},
-            f"裂变 {m.judged_count} 次全部无效，方向已耗尽",
-        )
-    if m.exhausted_factors:
-        factor, factor_judged = m.exhausted_factors[0]
-        return v(
-            "ITERATE",
-            "factor_exhausted",
-            {"factor": factor, "judged_count": factor_judged},
-            f"「{factor}」方向裂变 {factor_judged} 次全部无效，建议换维度迭代",
-        )
-    if m.payers == 0 and m.spend >= SPEND_MIN_JUDGE:
-        return v(
-            "PAUSE", "zero_payers", {"spend": m.spend},
-            f"消耗 {spend_s} 仍 0 付费，建议暂停",
-        )
-    # 薄付费样本：消耗够判定线但付费 <PAYERS_MIN_JUDGE 时 CPP 波动是倍数级，
-    # 不做方向性判定（防薄样本漏到 keep_healthy 显示"成本健康"）
-    if m.spend >= SPEND_MIN_JUDGE and 0 < m.payers < PAYERS_MIN_JUDGE:
-        return v(
-            "ITERATE",
-            "insufficient_payers",
-            {"spend": m.spend, "payers": m.payers},
-            f"消耗 {spend_s} 但仅 {m.payers} 个付费，样本太薄"
-            f"（<{PAYERS_MIN_JUDGE}），继续投放积累数据后再判定",
-        )
-    if (
-        use_cpp
-        and m.payers >= PAYERS_MIN_JUDGE
-        and m.cpp is not None
-        and m.cpp >= t["cpp_pause_line"]
-    ):
-        return v(
-            "PAUSE", "cpp_over_pause_line", {"cpp": m.cpp, "red": red},
-            f"付费成本 {cpp_s} 远超 ${red:.0f} 红线",
-        )
-    if (
-        use_cpp
-        and use_d1
-        and m.payers >= PAYERS_MIN_JUDGE
-        and m.cpp is not None
-        and m.cpp >= red
-        and (m.roas is not None and m.roas < t["roas_weak_line"])
-        and m.spend >= SPEND_SIGNIFICANT
-    ):
-        return v(
-            "PAUSE",
-            "cpp_over_red_weak_roas",
-            {
-                "cpp": m.cpp, "red": red, "roas": m.roas,
-                "roas_weak": t["roas_weak_line"], "spend": m.spend,
-            },
-            f"成本 {cpp_s} 超红线且 D1 Roas {m.roas * 100:.2f}% "
-            f"低于 {t['roas_weak_line'] * 100:.0f}%，消耗已 {spend_s}",
-        )
-    if m.days_idle is not None and m.days_idle > IDLE_DAYS_ARCHIVE:
-        return v(
-            "ITERATE",
-            "idle_was_healthy",
-            {"days_idle": m.days_idle, "cpp": m.cpp},
-            f"已 {m.days_idle} 天无消耗，历史表现达标（成本 {cpp_s}），建议复盘后重启或迭代",
-        )
-    if (
-        use_cpp
-        and m.payers >= PAYERS_MIN_JUDGE
-        and m.cpp is not None
-        and m.cpp < t["cpp_efficient"]
-        and m.spend < SPEND_SIGNIFICANT
-    ):
-        return v(
-            "ITERATE",
-            "efficient_not_scaled",
-            {"cpp": m.cpp, "spend": m.spend},
-            f"效率领先（成本 {cpp_s}）但消耗仅 {spend_s} 未起量，建议加注裂变",
-        )
-    if (
-        use_cpp
-        and m.payers >= PAYERS_MIN_JUDGE
-        and m.cpp is not None
-        and m.cpp >= red
-    ):
-        return v(
-            "ITERATE", "cpp_over_red", {"cpp": m.cpp, "red": red},
-            f"付费成本 {cpp_s} 超 ${red:.0f} 红线，建议优化变体降本",
-        )
-    if (
-        use_d1
-        and m.spend >= SPEND_MIN_JUDGE
-        and m.roas is not None
-        and m.roas < t["roas_green_line"]
-    ):
-        return v(
-            "ITERATE",
-            "d1_roas_below_green",
-            {"cpp": m.cpp, "roas": m.roas, "roas_green": t["roas_green_line"]},
-            f"成本 {cpp_s} 健康但 D1 Roas {m.roas * 100:.2f}% "
-            f"低于 {t['roas_green_line'] * 100:.0f}% 绿线，建议迭代提升回报",
-        )
-    if (
-        "d3_roas" in judge
-        and m.spend >= SPEND_MIN_JUDGE
-        and m.d3_roas is not None
-        and m.d3_roas < t["d3_roas_weak_line"]
-    ):
-        return v(
-            "ITERATE",
-            "d3_roas_weak",
-            {"d3_roas": m.d3_roas, "d3_roas_weak": t["d3_roas_weak_line"]},
-            f"D3 Roas {m.d3_roas * 100:.2f}% 低于 "
-            f"{t['d3_roas_weak_line'] * 100:.0f}% 弱线，后劲不足，建议迭代留存钩子",
-        )
-    if (
-        "d1_retention" in judge
-        and m.spend >= SPEND_MIN_JUDGE
-        and m.d1_retention is not None
-        and m.d1_retention < t["d1_retention_weak_line"]
-    ):
-        return v(
-            "ITERATE",
-            "d1_retention_weak",
-            {"d1_retention": m.d1_retention, "d1_retention_weak": t["d1_retention_weak_line"]},
-            f"次留 {m.d1_retention * 100:.1f}% 低于 "
-            f"{t['d1_retention_weak_line'] * 100:.0f}% 弱线，建议迭代前期节奏",
-        )
-    return v(
-        "KEEP", "keep_healthy", {"cpp": m.cpp},
-        f"成本 {cpp_s} 健康、Roas 达标、仍在投放，保持当前节奏",
+    ctx = RuleContext(
+        metrics=metrics,
+        thresholds=cfg.thresholds,
+        judge_metrics=frozenset(judge),
+        use_cpp="cpp" in judge,
+        use_d1="d1_roas" in judge,
+        spend_s=f"${metrics.spend:,.0f}",
+        cpp_s=f"${metrics.cpp:,.2f}" if metrics.cpp is not None else "-",
+        red=cfg.thresholds["cpp_red_line"],
+    )
+    for rule in RULES:
+        verdict = rule.evaluate(ctx)
+        if verdict is not None:
+            return verdict
+    raise AssertionError(  # pragma: no cover — keep_healthy 兜底永远命中
+        "RULES 缺少兜底规则（keep_healthy 必须永远命中）"
     )
 
 

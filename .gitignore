@@ -18,3 +18,8 @@ ip_pack/ip_pack.py
 # 本地实验工作区（E0/E1 探测脚本与真实数据）
 # 内含真实素材名、真人姓名与项目前缀，严禁入库——见 docs/open-source-release-checklist.md §2.6
 scripts/embedding-e0/
+
+# 本机 compose 覆盖（各机器端口/挂载 workaround，属本机配置）
+docker-compose.override.yml
+# API 本地运行/测试的 uploads 回退目录（含 fastembed 模型缓存，可再生成）
+apps/api/uploads/

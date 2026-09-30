@@ -25,7 +25,11 @@ from app.repositories.tags import TagRepository
 from app.schemas.asset import AssetDetail, AssetListItem, AssetUpdatePayload
 from app.schemas.common import Envelope, ok
 from app.services import graph_sync
-from app.services.embedding import embed_analysis_text, recompute_creative_representative
+from app.services.embedding import (
+    embed_analysis_text,
+    recompute_creative_representative,
+    recorded_embedding_model_id,
+)
 from app.services.media import ensure_video_contact_sheet, ensure_video_thumbnail
 from app.services.pipeline import cleanup_creative_if_empty
 from app.services.settings import resolve_ai_config
@@ -291,9 +295,12 @@ def update_asset(
         db, config, f"{payload.summary} {' '.join(payload.tags)}"
     )
     if embedding is not None:
-        AnalysisRepository(db).set_embedding(analysis, embedding)
+        # 行级 provenance 戳：embed 成功时 settings 已记录 active id，戳随向量写
+        model_id = recorded_embedding_model_id(db)
+        AnalysisRepository(db).set_embedding(analysis, embedding, model=model_id)
         if variant is not None:
             variant.embedding = embedding
+            variant.embedding_model = model_id
             db.flush()
         if creative is not None:
             # P0-3 口径：代表向量 = 有向量成员的真实均值 + 维护计数，

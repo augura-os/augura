@@ -350,7 +350,9 @@ class TestDerivationReviewItems:
         self._suggest(db_session, derivation.id, "language-market")
         assert derivation_review_items(db_session) == []
 
-    def test_orphan_suggestion_cleaned(self, db_session: Session) -> None:
+    def test_orphan_suggestion_skipped_not_deleted(self, db_session: Session) -> None:
+        """孤儿建议（边已删）读路径只跳过不删除——GET 不产生写副作用；
+        真正的清理在解链写路径（见下方解链用例）。"""
         self._suggest(db_session, str(uuid.uuid4()), "not-a-derivation")
         assert derivation_review_items(db_session) == []
         remaining = db_session.scalars(
@@ -358,7 +360,33 @@ class TestDerivationReviewItems:
                 JudgeSuggestion.kind == "derivation-factor"
             )
         ).all()
-        assert remaining == []
+        assert len(remaining) == 1
+
+    def test_delete_derivation_cleans_factor_suggestion(
+        self, db_session: Session
+    ) -> None:
+        """解链（写路径）同步清掉该边的 derivation-factor 建议——收件箱
+        不留幽灵条目；但不误伤其他 kind 的建议（如 verdict）。"""
+        from app.api.routes.derivations import delete_derivation
+        from app.config import Settings
+
+        _, derivation = self._seed_derivation(db_session)
+        self._suggest(db_session, derivation.id, "not-a-derivation")
+        db_session.add(
+            JudgeSuggestion(
+                id=str(uuid.uuid4()), kind="verdict",
+                left_id=derivation.id, right_id=None,
+                verdict="positive", votes=2, reason="LLM 判定",
+            )
+        )
+        db_session.flush()
+        assert len(derivation_review_items(db_session)) == 1
+
+        delete_derivation(derivation.id, db=db_session, settings=Settings())
+
+        assert derivation_review_items(db_session) == []
+        remaining = db_session.scalars(select(JudgeSuggestion)).all()
+        assert [row.kind for row in remaining] == ["verdict"]
 
     def test_scanner_suggested_pair_union_into_inbox(self, db_session: Session) -> None:
         """扫描器召回的对（视觉/分析通道，文本分低于候选下限）有 merge 建议时

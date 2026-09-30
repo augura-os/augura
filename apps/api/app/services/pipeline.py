@@ -49,7 +49,11 @@ from app.services.clustering import (
     merge_embedding,
     top_creative_matches_by_text,
 )
-from app.services.embedding import embed_analysis_text, recompute_creative_representative
+from app.services.embedding import (
+    embed_analysis_text,
+    recompute_creative_representative,
+    recorded_embedding_model_id,
+)
 from app.services.judge_calibration import judge_auto_allowed
 from app.services.media import build_contact_sheet, extract_smart_frames
 from app.services.merge_measure import (
@@ -180,6 +184,7 @@ def _cluster(
     embedding: list[float] | None,
     text_signature: str,
     *,
+    embedding_model: str | None = None,
     settings: Settings | None = None,
     storage: StorageService | None = None,
     local_video: str | None = None,
@@ -194,11 +199,16 @@ def _cluster(
     自动归入会写 edit_logs（field="cluster"，auto: 前缀），供校准回路
     统计改判率（人工移动/拆分 = 改判）。
 
+    ``embedding_model`` 是 ``embedding`` 的行级 provenance 戳（向量写 None
+    时戳同步清 None——同生同灭）。
+
     Returns ``(creative, previous_creative_id)`` — the latter is set when a
     re-analysis moved the variant away from a different creative.
     """
     variant_repo = VariantRepository(db)
     creative_repo = CreativeRepository(db)
+    # 戳与向量同生同灭：本次向量缺失（embed 降级/复用到 NULL）时戳也为 None
+    stamp = embedding_model if embedding is not None else None
 
     previous_creative_id: str | None = None
     variant = variant_repo.get_by_asset(asset.id)
@@ -263,6 +273,8 @@ def _cluster(
                     embedding,
                 )
             )
+            # 均值仍同源（一致性机制保证成员向量同模型）→ 戳随向量更新
+            creative.embedding_model = stamp
         creative.representative_text = text_signature
         EditLogRepository(db).record(
             entity_type="creative",
@@ -278,6 +290,7 @@ def _cluster(
             representative_embedding=embedding,
             representative_text=text_signature,
             embedding_count=1 if embedding is not None else 0,
+            embedding_model=stamp,
         )
 
     if variant is None:
@@ -286,10 +299,12 @@ def _cluster(
             creative_id=creative.id,
             name=Path(asset.filename).stem,
             embedding=embedding,
+            embedding_model=stamp,
         )
     else:
         variant.creative_id = creative.id
         variant.embedding = embedding
+        variant.embedding_model = stamp
     db.flush()
     return creative, previous_creative_id
 
@@ -437,6 +452,9 @@ def _run_analysis_pipeline(
             assert existing is not None  # resume implies existing
             payload = _payload_from_result(existing)
             embedding: list[float] | None = existing.embedding
+            # 向量是上次分析产出的——provenance 戳沿用 analysis 行上的原戳
+            # （迁移前的存量行为 None = 未知模型，语义正确）
+            embedding_model = existing.embedding_model
             tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
             if asset.file_type == "video":
                 local_video = _redownload_for_measure(storage, asset, tmp_dir)
@@ -458,8 +476,13 @@ def _run_analysis_pipeline(
             # 嵌入文本 = summary + tags（E0 对照实验拍板，见 E0 报告 §5）。
             embed_text = f"{payload.summary} {' '.join(payload.tags)}"
             embedding = embed_analysis_text(db, config, embed_text)
+            # 行级 provenance 戳：embed 成功时 settings 已记录 active id
+            # （_ensure_model_consistency），直接取记录值；向量 None 戳也 None
+            embedding_model = (
+                recorded_embedding_model_id(db) if embedding is not None else None
+            )
             if embedding is not None:
-                analysis_repo.set_embedding(analysis, embedding)
+                analysis_repo.set_embedding(analysis, embedding, model=embedding_model)
 
             # 级联测量裁决用：_collect_frames 已把视频下载到本地临时目录
             if asset.file_type == "video":
@@ -475,6 +498,7 @@ def _run_analysis_pipeline(
             payload.creative_name,
             embedding,
             text_signature,
+            embedding_model=embedding_model,
             settings=settings,
             storage=storage,
             local_video=local_video,

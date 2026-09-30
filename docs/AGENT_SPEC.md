@@ -98,6 +98,7 @@ Project、Creative、CreativeVariant、CreativeAsset、Performance、Tag、TagAs
 - 所有字段用 JSON/JSONB 存储数组类数据，保证后续可扩展。
 - GraphNode / GraphEdge 为 Neo4j 的 SQL 镜像（Neo4j 为关系事实源；`/graph` 优先读 Neo4j，Neo4j 不可用时回退 SQL 镜像）。
 - Performance 字段建议：`asset_id`（可空）、`creative_name`、日期、impressions、clicks、spend、installs、原始行 JSON（Excel 列名不固定，宽松解析：列名包含 name/impression/click/spend/install 即识别）。
+- KPI 聚合口径（Performance 行 → CreativeMetrics：spend/cpp/roas/留存等）注册在 `apps/api/app/services/metrics.py`（口径注册表），人读版见 `docs/metrics-semantics.md`；新增 KPI 必须先注册口径再实现。
 - Alembic 初始迁移包含全部表；api 容器启动命令已固定为 `alembic upgrade head && uvicorn ...`（见 infra/docker/api.Dockerfile，禁止改动 Dockerfile，alembic 配置必须适配该工作目录 `/app/apps/api`）。
 
 ## 7. Neo4j

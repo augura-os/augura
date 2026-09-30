@@ -607,7 +607,7 @@ def creative_scores(
             ),
             metrics,
         )
-        for metrics, _action, _reasons in report.items
+        for metrics, _verdict in report.items
     }
 
 

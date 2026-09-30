@@ -38,15 +38,19 @@ class RecommendationItem(BaseModel):
     dna_name: str | None
     action: RecommendationAction
     reasons: list[str] = Field(default_factory=list)
+    # 结构化判定（services/recommendation Verdict）：前端按 reason_code + params
+    # 渲染 i18n 决策句；reasons 保留旧中文文案兼容
+    reason_code: str = ""
+    reason_params: dict[str, float | int | str | None] = Field(default_factory=dict)
+    # 货币化 priority（services/priority）：这条建议的日度金额 + 后验把握
+    priority_dollars: float = 0.0
+    confidence: float = 0.0
     metrics: MetricsOut
     # Creative Score（services/creative_score）：总分 + 四要素拆解
     score: float | None = None
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     # 生命周期（services/lifecycle）：active / watch / archived
     lifecycle_state: str = "active"
-    # 货币化优先级（services/priority）：≈ 每日价值金额 + 方向把握后验概率
-    priority_dollars: float = 0.0
-    confidence: float = 0.0
 
 
 class RecommendationReport(BaseModel):

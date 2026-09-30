@@ -3,8 +3,10 @@
 Surfaces everything that needs a human ruling, so nothing the AI processed
 silently waits to be found by scrolling the graph (design: GPT dialogue
 workflow vol.7 "AI Review Queue"; boundary-rules §6 low-confidence badge).
-Computed on read like the recommendation engine; items leave the queue once
-the underlying state is fixed (assigned, merged, closed).
+Computed on read like the recommendation engine — pure read, never writes
+(cleanup of stale suggestions happens on the write paths that create
+them); items leave the queue once the underlying state is fixed
+(assigned, merged, closed).
 
 Four categories:
 - low_confidence:    analysis confidence < 0.7
@@ -496,8 +498,9 @@ def pending_verdict_items(
 def derivation_review_items(db: Session) -> list[ReviewItem]:
     """裂变因子复核建议（review_derivations.py 测量层/LLM 产出，建议级）。
 
-    已采纳（建议因子 == 当前因子）的跳过；边已删的孤儿建议顺手清掉
-    （commit 持久化清理——收件箱只进不出，不能留幽灵条目）。
+    已采纳（建议因子 == 当前因子）的跳过；边已删的孤儿建议同样跳过
+    （真正的清理在写路径——routes/derivations 解链时同步删除；读路径
+    只读不写）。
     """
     from app.models import CreativeVariant, VariantDerivation
 
@@ -516,13 +519,10 @@ def derivation_review_items(db: Session) -> list[ReviewItem]:
     creatives = {c.id: c for c in db.scalars(select(Creative)).all()}
 
     items: list[ReviewItem] = []
-    orphans = 0
     for suggestion in suggestions:
         derivation = derivations.get(suggestion.left_id)
         if derivation is None:
-            db.delete(suggestion)
-            orphans += 1
-            continue
+            continue  # 孤儿建议（边已删）：跳过，清理留给解链写路径
         if suggestion.verdict == derivation.factor:
             continue  # 建议已被采纳（PUT 改了 factor），条目随状态消除
         source = variants.get(derivation.source_variant_id)
@@ -560,8 +560,6 @@ def derivation_review_items(db: Session) -> list[ReviewItem]:
                 suggestion_reason=suggestion.reason,
             )
         )
-    if orphans:
-        db.commit()
     return items
 
 
@@ -571,7 +569,7 @@ def creative_scores(
     """全部 creative 的评分（creative_id → (breakdown, metrics)）。
 
     收件箱建议归档与自动流转共用同一份计算，避免两边分数口径漂移；
-    调用方已有 report（recommendations 路由）时传入复用，不重复聚合。
+    调用方已有 report（services/daily_brief）时传入复用，不重复聚合。
     """
     from app.services.creative_score import score_creative
     from app.services.settings import ScoreConfig, resolve_score_config

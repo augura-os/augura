@@ -24,6 +24,7 @@ from app.repositories.jobs import JobRepository
 from app.repositories.performance import PerformanceRepository
 from app.schemas.asset import SkippedFile, UploadResult
 from app.schemas.common import Envelope, ok
+from app.services import daily_brief
 from app.services.excel import detect_overlap, parse_excel
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ def upload_files(
     created: list[CreativeAsset] = []
     skipped: list[SkippedFile] = []
     warnings: list[str] = []
+    imported_excel = False
 
     # Upload dedup: exact filename match against the library and within the
     # batch itself — duplicates are skipped, never re-analyzed or re-stored.
@@ -132,6 +134,7 @@ def upload_files(
 
         if file_type == "excel" and parsed_rows is not None:
             PerformanceRepository(db).bulk_create(asset.id, parsed_rows)
+            imported_excel = True
         elif file_type in ("video", "image"):
             # Durable queue row, same transaction as the asset: the worker
             # process picks it up — no in-process background task that could
@@ -141,6 +144,13 @@ def upload_files(
         created.append(asset)
 
     db.commit()
+
+    # 投放数据（Excel）导入后立即刷新 creative score 并做生命周期自动
+    # 流转——数据变化时是自动流转最正确的触发点（GET /creatives/
+    # recommendations 已纯读化，不再顺带流转）
+    if imported_excel:
+        daily_brief.refresh_creative_states(db)
+        db.commit()
 
     message = f"已上传 {len(created)} 个文件"
     if skipped:

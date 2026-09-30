@@ -5,6 +5,9 @@
 
 - 自动流转只做 active → watch（标记性质，可逆且无感）；score 更低且
   长期无消耗的"建议归档"只进收件箱，人工确认才置 archived
+- 自动流转的触发点是写路径：services/daily_brief.refresh_creative_states
+  （POST /creatives/recommendations/refresh、投放数据 Excel 导入后）——
+  看板读路径（GET）只读不流转
 - 人工操作永远优先（Human > AI）：人工置的 archived 不会被自动恢复
 - 每次流转写 edit_logs（AI Constitution §5）
 """

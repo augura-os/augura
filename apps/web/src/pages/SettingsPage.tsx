@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { EmbeddingBackend } from "@shared";
+import type { AiTestResult, EmbeddingBackend } from "@shared";
 import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { fetchAiModels, testAiConnection } from "../services/api";
@@ -17,6 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
+import { aiTestResultText, apiErrorText } from "../lib/apiErrorText";
 import { useLanguage, useT, type Lang } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
@@ -137,7 +138,7 @@ export default function SettingsPage() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<AiTestResult | null>(null);
   // 素材指标配置（v0.11）
   const [profile, setProfile] = useState<string[]>([]);
   const [judgeMetrics, setJudgeMetrics] = useState<string[]>([]);
@@ -209,7 +210,7 @@ export default function SettingsPage() {
       .then((list) => setModelOptions(sortVisionFirst(list)))
       .catch((err) => {
         if (!silent) {
-          setModelsError(err instanceof Error ? err.message : t("settings.modelsFetchFailed"));
+          setModelsError(apiErrorText(err, t) || t("settings.modelsFetchFailed"));
         }
       })
       .finally(() => setModelsLoading(false));
@@ -224,7 +225,7 @@ export default function SettingsPage() {
       .catch((err) =>
         setTestResult({
           ok: false,
-          message: err instanceof Error ? err.message : t("settings.testFailed"),
+          message: apiErrorText(err, t) || t("settings.testFailed"),
         }),
       )
       .finally(() => setTesting(false));
@@ -270,7 +271,7 @@ export default function SettingsPage() {
           if (baseUrl.trim()) onFetchModels(true);
         },
         onError: (mutationError) => {
-          setFeedback(mutationError instanceof Error ? mutationError.message : t("common.saveFailed"));
+          setFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
         },
       },
     );
@@ -307,7 +308,7 @@ export default function SettingsPage() {
           setTimeout(() => setScoreFeedback(""), 3000);
         },
         onError: (mutationError) => {
-          setScoreFeedback(mutationError instanceof Error ? mutationError.message : t("common.saveFailed"));
+          setScoreFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
         },
       },
     );
@@ -351,7 +352,7 @@ export default function SettingsPage() {
           setTimeout(() => setMetricFeedback(""), 3000);
         },
         onError: (mutationError) => {
-          setMetricFeedback(mutationError instanceof Error ? mutationError.message : t("common.saveFailed"));
+          setMetricFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
         },
       },
     );
@@ -604,7 +605,7 @@ export default function SettingsPage() {
                 <span
                   className={testResult.ok ? "text-sm text-emerald-600" : "text-sm text-red-600"}
                 >
-                  {testResult.message}
+                  {aiTestResultText(testResult, t)}
                 </span>
               ) : null}
             </div>
@@ -696,20 +697,26 @@ export default function SettingsPage() {
               {detectedPrefixes.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-cyan-200 bg-cyan-50 px-2 py-1.5">
                   <span className="text-[11px] text-cyan-800">{t("settings.metrics.detected")}</span>
-                  {detectedPrefixes.map((item) => (
+                  {detectedPrefixes.map((item) => {
+                    // 前缀取结构化字段 reason_params.prefix；旧后端无该字段时
+                    // 回退剥离 title 的中文前缀（「市场前缀 {code}」）
+                    const prefix =
+                      typeof item.reason_params?.prefix === "string"
+                        ? item.reason_params.prefix
+                        : item.title.replace("市场前缀 ", "");
+                    return (
                     <button
                       key={item.title}
                       type="button"
-                      // title 由后端 review.py 生成为「市场前缀 {code}」，仍是中文；
-                      // 此处按原文剥离前缀。后端文案翻译时必须同步改为错误码/结构化字段。
                       title={t("settings.metrics.addPrefixTitle").replace("{reason}", item.reason)}
                       disabled={updateMutation.isPending}
-                      onClick={() => addDetectedPrefix(item.title.replace("市场前缀 ", ""))}
+                      onClick={() => addDetectedPrefix(prefix)}
                       className="rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-cyan-700 ring-1 ring-cyan-300 transition hover:bg-cyan-100"
                     >
-                      {item.title.replace("市场前缀 ", "")} {t("settings.metrics.addPrefix")}
+                      {prefix} {t("settings.metrics.addPrefix")}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
               {marketRows.map((code) => {

@@ -22,8 +22,11 @@ import {
   updateLifecycle,
 } from "../../services/api";
 import { factorLabel } from "../../lib/short-name";
+import { apiErrorText } from "../../lib/apiErrorText";
+import { apiErrorCode } from "../../services/client";
 import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
+import { inboxReasonLine, inboxTitleLine } from "./inboxReason";
 import { InterventionDensityWidget } from "./InterventionDensityWidget";
 import { HubSkewWidget } from "./HubSkewWidget";
 
@@ -149,17 +152,15 @@ function MergeActions({ item }: { item: ReviewItem }) {
     },
     onError: (error, body) => {
       setDone(null);
-      const message = error instanceof Error ? error.message : "";
-      // 守卫拦截的消息由后端返回且仍为中文，这里按原文匹配。
-      // 后端消息翻译为英文时，此判断必须同步改为错误码——详见 PR 说明。
-      if (message.includes("守卫拦截")) {
-        setBlockMessage(message);
+      // 守卫拦截按结构化错误码识别（envelope code），替代中文子串匹配
+      if (apiErrorCode(error) === "merge_guard_blocked") {
+        setBlockMessage(apiErrorText(error, t));
         setPendingBody(body);
       } else {
         // 超时/500/网络错误以前被静默吞掉（卡片原地不动像"卡住"）——
         // 必须露出错误让用户知道要重试。注意：超时场景后端可能实际已
         // 合并成功，队列轮询（15s）会把已处理的卡片自动撤下。
-        setErrorMessage(message || t("common.failedRetry"));
+        setErrorMessage(apiErrorText(error, t) || t("common.failedRetry"));
       }
     },
   });
@@ -1155,10 +1156,10 @@ export function ReviewInboxPanel({
                           className="block rounded-xl px-3 py-2 transition hover:bg-black/[0.04]"
                         >
                           <span className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900" title={item.title}>
-                            {item.title}
+                            {inboxTitleLine(item, t)}
                           </span>
                           <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-neutral-500">
-                            {item.reason}
+                            {inboxReasonLine(item, t)}
                           </span>
                         </Link>
                       ) : (
@@ -1192,11 +1193,11 @@ export function ReviewInboxPanel({
                               </>
                             ) : (
                               <span className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900" title={item.title}>
-                                {item.title}
+                                {inboxTitleLine(item, t)}
                               </span>
                             )}
                             <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-neutral-500">
-                              {item.reason}
+                              {inboxReasonLine(item, t)}
                             </span>
                           </button>
                           {item.kind === "family_bootstrap" ? (

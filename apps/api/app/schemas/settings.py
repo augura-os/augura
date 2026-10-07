@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SettingsInfo(BaseModel):
@@ -56,7 +56,10 @@ class AiTestRequest(BaseModel):
 
 class AiTestResult(BaseModel):
     ok: bool
+    # message 保留中文旧文案作 legacy fallback；前端优先按 code + params 渲染
     message: str
+    code: str = ""
+    params: dict[str, object] = Field(default_factory=dict)
 
 
 class SettingsUpdate(BaseModel):

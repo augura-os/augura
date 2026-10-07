@@ -83,13 +83,23 @@ class AssetDetail(BaseModel):
 class SkippedFile(BaseModel):
     filename: str
     reason: str
+    # i18n 结构化文案：前端按 code 翻译；reason 保留中文旧文案作 legacy 兜底
+    code: str | None = None
+
+
+class UploadWarning(BaseModel):
+    """Excel 窗口重叠警告：code + params 供前端 i18n；message 为中文兜底。"""
+
+    code: str
+    message: str
+    params: dict[str, object] = Field(default_factory=dict)
 
 
 class UploadResult(BaseModel):
     uploaded: list[AssetListItem] = Field(default_factory=list)
     skipped: list[SkippedFile] = Field(default_factory=list)
     # 滚动 Excel 的窗口重叠警告（新表与库内既有数据同名同日的行数）
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[UploadWarning] = Field(default_factory=list)
 
 
 class AssetUpdatePayload(AnalysisPayload):

@@ -22,7 +22,7 @@ from app.models import CreativeAsset
 from app.repositories.assets import AssetRepository
 from app.repositories.jobs import JobRepository
 from app.repositories.performance import PerformanceRepository
-from app.schemas.asset import SkippedFile, UploadResult
+from app.schemas.asset import SkippedFile, UploadResult, UploadWarning
 from app.schemas.common import Envelope, ok
 from app.services import daily_brief
 from app.services.excel import detect_overlap, parse_excel
@@ -55,13 +55,13 @@ def upload_files(
     files: Annotated[list[UploadFile], File(...)],
 ) -> Envelope[UploadResult]:
     if not files:
-        raise ApiError(400, "未接收到文件（字段名应为 files）")
+        raise ApiError(400, "未接收到文件（字段名应为 files）", code="upload_no_files")
 
     asset_repo = AssetRepository(db)
     job_repo = JobRepository(db)
     created: list[CreativeAsset] = []
     skipped: list[SkippedFile] = []
-    warnings: list[str] = []
+    warnings: list[UploadWarning] = []
     imported_excel = False
 
     # Upload dedup: exact filename match against the library and within the
@@ -78,22 +78,41 @@ def upload_files(
             raise ApiError(
                 400,
                 f"不支持的文件类型：{filename}（支持 mp4/mov/png/jpg/xlsx/xls）",
+                code="upload_unsupported_type",
+                params={"filename": filename},
             )
         if filename in existing or filename in batch_seen:
-            skipped.append(SkippedFile(filename=filename, reason="库中已存在同名素材"))
+            skipped.append(
+                SkippedFile(
+                    filename=filename,
+                    reason="库中已存在同名素材",  # legacy fallback
+                    code="upload_duplicate",
+                )
+            )
             continue
         batch_seen.add(filename)
 
         file_type, fallback_mime = _ALLOWED[extension]
         data = upload.file.read()
         if not data:
-            raise ApiError(400, f"文件为空：{filename}")
+            raise ApiError(
+                400,
+                f"文件为空：{filename}",
+                code="upload_empty_file",
+                params={"filename": filename},
+            )
         if len(data) > settings.upload_max_bytes:
             limit = settings.upload_max_bytes
             limit_text = (
                 f"{limit / 1024 ** 3:g} GB" if limit >= 1024**3 else f"{limit / 1024 ** 2:g} MB"
             )
-            raise ApiError(413, f"文件超过大小上限：{filename}（上限 {limit_text}）")
+            raise ApiError(
+                413,
+                f"文件超过大小上限：{filename}（上限 {limit_text}）",
+                code="upload_too_large",
+                # 原始字节数交由前端按界面语言格式化（GB/MB）
+                params={"filename": filename, "limit_bytes": limit},
+            )
         mime_type = upload.content_type or fallback_mime
 
         # Excel is parsed before anything is persisted, so an invalid file
@@ -114,9 +133,22 @@ def upload_files(
             if overlap is not None:
                 files_s = "、".join(f"《{name}》" for name in overlap.source_files)
                 warnings.append(
-                    f"{filename}：与 {files_s} 在 "
-                    f"{overlap.date_min}~{overlap.date_max} 窗口重叠 "
-                    f"{overlap.row_count} 行，请核查清理以免重复计数"
+                    UploadWarning(
+                        code="upload_excel_overlap",
+                        # legacy fallback：旧客户端直接渲染 message
+                        message=(
+                            f"{filename}：与 {files_s} 在 "
+                            f"{overlap.date_min}~{overlap.date_max} 窗口重叠 "
+                            f"{overlap.row_count} 行，请核查清理以免重复计数"
+                        ),
+                        params={
+                            "filename": filename,
+                            "files": list(overlap.source_files),
+                            "date_min": str(overlap.date_min),
+                            "date_max": str(overlap.date_max),
+                            "rows": overlap.row_count,
+                        },
+                    )
                 )
 
         storage_key = f"{uuid4().hex}{extension}"

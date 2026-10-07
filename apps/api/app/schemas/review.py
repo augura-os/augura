@@ -60,6 +60,11 @@ class ReviewItem(BaseModel):
     kind: ReviewKind
     title: str
     reason: str
+    # i18n 结构化文案：前端按 reason_code 查 `inbox.reason.<code>` /
+    # `inbox.title.<code>` 模板并用 reason_params 插值；模板缺失或
+    # reason_code 为空时回退 reason/title 旧文案（legacy fallback）
+    reason_code: str | None = None
+    reason_params: dict[str, object] = Field(default_factory=dict)
     creative_id: str | None = None
     creative_name: str | None = None
     asset_id: str | None = None

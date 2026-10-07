@@ -20,15 +20,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _asset_not_found(asset_id: str) -> ApiError:
+    # message 保留中文旧文案作 legacy fallback；前端按 code 渲染
+    return ApiError(
+        404,
+        f"素材不存在：{asset_id}",
+        code="asset_not_found",
+        params={"id": asset_id},
+    )
+
+
 @router.post("/analysis", response_model=Envelope[AnalysisPayload])
 def run_analysis(
     payload: AnalysisRequest, db: DbDep
 ) -> Envelope[AnalysisPayload]:
     asset = AssetRepository(db).get(payload.asset_id)
     if asset is None:
-        raise ApiError(404, f"素材不存在：{payload.asset_id}")
+        raise _asset_not_found(payload.asset_id)
     if asset.file_type == "excel":
-        raise ApiError(400, "Excel 素材不进行 AI 分析")
+        raise ApiError(400, "Excel 素材不进行 AI 分析", code="analysis_excel_asset")
 
     run_analysis_pipeline(asset.id)
 
@@ -36,11 +46,20 @@ def run_analysis(
     db.expire_all()
     asset = AssetRepository(db).get(payload.asset_id)
     if asset is None:
-        raise ApiError(404, f"素材不存在：{payload.asset_id}")
+        raise _asset_not_found(payload.asset_id)
     if asset.analysis_status == "failed":
-        raise ApiError(500, asset.status_message or "分析失败")
+        raise ApiError(
+            500,
+            asset.status_message or "分析失败",
+            code="analysis_failed",
+            params={"detail": asset.status_message or ""},
+        )
 
     analysis = AnalysisRepository(db).get_by_asset(asset.id)
     if analysis is None:
-        raise ApiError(500, "分析结果缺失（状态已更新但无 AnalysisResult）")
+        raise ApiError(
+            500,
+            "分析结果缺失（状态已更新但无 AnalysisResult）",
+            code="analysis_result_missing",
+        )
     return ok(analysis_to_payload(analysis), message="分析完成")

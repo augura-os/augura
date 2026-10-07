@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table";
+import { apiErrorText } from "../lib/apiErrorText";
 import { useT } from "../lib/i18n";
 
 function TypeIcon({ type }: { type: FileType }) {
@@ -100,7 +101,7 @@ export default function AssetListPage() {
 
         {isError ? (
           <p className="text-sm text-red-600">
-            {error instanceof Error ? error.message : t("assets.list.loadFailed")}
+            {apiErrorText(error, t) || t("assets.list.loadFailed")}
           </p>
         ) : null}
 
@@ -179,9 +180,8 @@ export default function AssetListPage() {
                             retryJob.mutate(asset.id, {
                               onError: (mutationError) =>
                                 setRetryError(
-                                  mutationError instanceof Error
-                                    ? mutationError.message
-                                    : t("assets.list.retryFailed"),
+                                  apiErrorText(mutationError, t) ||
+                                    t("assets.list.retryFailed"),
                                 ),
                             });
                           }}

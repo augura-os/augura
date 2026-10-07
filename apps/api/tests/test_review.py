@@ -110,7 +110,7 @@ class TestMergeCandidates:
         es, _ = _seed(db_session, creative_name="c-es",
               filename="KS_KR-260104-58-制作人甲-反复挑战重试Ai片头V1-竖.mp4")
         items = [i for i in merge_candidate_items(db_session)
-                 if "语言对" in i.reason]
+                 if i.reason_code == "multi_market_same_name"]
         assert len(items) == 1
         assert "↔" in items[0].title
         # 内联合并操作需要双方 id（收件箱直操 UX）
@@ -124,7 +124,7 @@ class TestMergeCandidates:
         es, es_asset = _seed(db_session, creative_name="c-es",
               filename="KS_KR-260104-58-制作人甲-反复挑战重试Ai片头V1-竖.mp4")
         items = [i for i in merge_candidate_items(db_session)
-                 if "语言对" in i.reason]
+                 if i.reason_code == "multi_market_same_name"]
         assert len(items) == 1
         assert items[0].preview_asset_id == pt_asset.id
         assert items[0].related_preview_asset_id == es_asset.id
@@ -149,7 +149,7 @@ class TestMergeCandidates:
             )
         db_session.flush()
         assert [i for i in merge_candidate_items(db_session)
-                if "语言对" in i.reason] == []
+                if i.reason_code == "multi_market_same_name"] == []
 
     def test_borderline_similarity_window(self, db_session: Session) -> None:
         # Jaccard = 2 shared / 8 union ≈ 0.25 → inside [0.20, 0.34).
@@ -157,13 +157,13 @@ class TestMergeCandidates:
               filename="KS_EN-1.mp4")
         _seed(db_session, creative_name="alpha-beta-x1-x2-x3", filename="KS_EN-2.mp4")
         items = merge_candidate_items(db_session)
-        borderline = [i for i in items if "相似度" in i.reason]
+        borderline = [i for i in items if i.reason_code == "merge_similarity"]
         assert len(borderline) == 1
 
     def test_identical_names_not_borderline(self, db_session: Session) -> None:
         _seed(db_session, creative_name="same-name", filename="KS_EN-1.mp4")
         _seed(db_session, creative_name="same-name", filename="KS_EN-2.mp4")
-        items = [i for i in merge_candidate_items(db_session) if "相似度" in i.reason]
+        items = [i for i in merge_candidate_items(db_session) if i.reason_code == "merge_similarity"]
         # score 1.0 is above BORDERLINE_HIGH, must not be reported
         assert items == []
 
@@ -173,13 +173,13 @@ class TestMergeCandidates:
               filename="KS_EN-a1.mp4")
         _seed(db_session, creative_name="sick-girl-infirmary-village-builder",
               filename="KS_EN-a2.mp4")
-        items = [i for i in merge_candidate_items(db_session) if "相似度" in i.reason]
+        items = [i for i in merge_candidate_items(db_session) if i.reason_code == "merge_similarity"]
         assert items == []
 
     def test_unrelated_names_not_borderline(self, db_session: Session) -> None:
         _seed(db_session, creative_name="aaa", filename="KS_EN-1.mp4")
         _seed(db_session, creative_name="zzz", filename="KS_EN-2.mp4")
-        items = [i for i in merge_candidate_items(db_session) if "相似度" in i.reason]
+        items = [i for i in merge_candidate_items(db_session) if i.reason_code == "merge_similarity"]
         assert items == []
 
 
@@ -206,7 +206,7 @@ class TestObservationPairExclusion:
               filename="KS_KR-260104-58-制作人甲-反复挑战重试Ai片头V1-竖.mp4")
         self._stub_repo(monkeypatch, [(pt.id, es.id)])
         assert [i for i in merge_candidate_items(db_session)
-                if "语言对" in i.reason] == []
+                if i.reason_code == "multi_market_same_name"] == []
 
     def test_observed_borderline_pair_not_flagged(
         self, db_session: Session, monkeypatch
@@ -217,7 +217,7 @@ class TestObservationPairExclusion:
               filename="KS_EN-2.mp4")
         self._stub_repo(monkeypatch, [(left.id, right.id)])
         assert [i for i in merge_candidate_items(db_session)
-                if "相似度" in i.reason] == []
+                if i.reason_code == "merge_similarity"] == []
 
     def test_other_pairs_still_flagged(
         self, db_session: Session, monkeypatch
@@ -229,7 +229,7 @@ class TestObservationPairExclusion:
         # 观察对里是不相关的另一对，不影响本对浮出水面
         self._stub_repo(monkeypatch, [(pt.id, str(uuid.uuid4()))])
         assert len([i for i in merge_candidate_items(db_session)
-                    if "语言对" in i.reason]) == 1
+                    if i.reason_code == "multi_market_same_name"]) == 1
 
 
 class TestSplitRulingExclusion:
@@ -250,7 +250,7 @@ class TestSplitRulingExclusion:
               filename="KS_KR-260104-58-制作人甲-反复挑战重试Ai片头V1-竖.mp4")
         self._rule(db_session, "c-pt", "c-es")
         assert [i for i in merge_candidate_items(db_session)
-                if "语言对" in i.reason] == []
+                if i.reason_code == "multi_market_same_name"] == []
 
     def test_ruled_borderline_pair_not_flagged(self, db_session: Session) -> None:
         _seed(db_session, creative_name="alpha-beta-gamma-delta-epsilon",
@@ -258,7 +258,7 @@ class TestSplitRulingExclusion:
         _seed(db_session, creative_name="alpha-beta-x1-x2-x3", filename="KS_EN-2.mp4")
         self._rule(db_session, "alpha-beta-gamma-delta-epsilon", "alpha-beta-x1-x2-x3")
         assert [i for i in merge_candidate_items(db_session)
-                if "相似度" in i.reason] == []
+                if i.reason_code == "merge_similarity"] == []
 
 
 class TestRecentCreativeIds:
@@ -330,6 +330,9 @@ class TestDerivationReviewItems:
         assert len(items) == 1
         item = items[0]
         assert item.kind == "derivation_review"
+        assert item.reason_code == "mislink_suspect"
+        assert item.reason_params == {"reason": "测量证据abc"}
+        # legacy fallback 文案保留
         assert item.reason.startswith("疑似误链：测量证据abc")
         assert item.derivation_id == derivation.id
         assert item.creative_id == creative.id
@@ -343,6 +346,12 @@ class TestDerivationReviewItems:
         self._suggest(db_session, derivation.id, "language-market")
         items = derivation_review_items(db_session)
         assert len(items) == 1
+        assert items[0].reason_code == "factor_suggestion"
+        assert items[0].reason_params == {
+            "verdict": "language-market",
+            "reason": "测量证据abc",
+        }
+        # legacy fallback 文案保留
         assert items[0].reason == "因子建议改为 language-market：测量证据abc"
 
     def test_adopted_suggestion_skipped(self, db_session: Session) -> None:
@@ -411,6 +420,8 @@ class TestDerivationReviewItems:
         assert len(hit) == 1
         assert hit[0].suggestion == "merge"
         assert hit[0].suggestion_votes == 3
+        assert hit[0].reason_code == "scanner_recall"
+        # legacy fallback 文案保留
         assert "扫描器召回" in hit[0].reason
 
     def test_scanner_split_suggestion_not_surfaced(self, db_session: Session) -> None:

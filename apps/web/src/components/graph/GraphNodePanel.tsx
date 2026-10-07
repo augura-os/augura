@@ -18,6 +18,7 @@ import { PerformanceSummary, PerformanceTable } from "../assets/PerformanceTable
 import { EvolutionSection } from "./EvolutionSection";
 import { shortAssetLabel } from "../../lib/short-name";
 import { useMetricConfig } from "../../hooks/useMetricConfig";
+import { apiErrorText } from "../../lib/apiErrorText";
 import { useT } from "../../lib/i18n";
 import { recommendationLines } from "./briefLine";
 
@@ -86,7 +87,7 @@ function AssetPanel({ assetId }: { assetId: string }) {
   if (isError) {
     return (
       <p className="text-sm text-red-600">
-        {error instanceof Error ? error.message : t("graph.node.loadFailed")}
+        {apiErrorText(error, t) || t("graph.node.loadFailed")}
       </p>
     );
   }
@@ -367,9 +368,7 @@ function CreativePanel({ node, graph }: { node: GraphNodeDTO; graph: GraphRespon
             </Button>
             {splitMutation.isError ? (
               <p className="text-xs text-red-600">
-                {splitMutation.error instanceof Error
-                  ? splitMutation.error.message
-                  : t("graph.node.splitFailed")}
+                {apiErrorText(splitMutation.error, t) || t("graph.node.splitFailed")}
               </p>
             ) : null}
           </div>

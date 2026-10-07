@@ -10,6 +10,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
+import { apiErrorText } from "../lib/apiErrorText";
 import { useT } from "../lib/i18n";
 
 interface FormState {
@@ -88,7 +89,7 @@ export default function AssetDetailPage() {
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-red-600">
-          {error instanceof Error ? error.message : t("assets.detail.loadFailed")}
+          {apiErrorText(error, t) || t("assets.detail.loadFailed")}
         </p>
       </div>
     );
@@ -119,9 +120,7 @@ export default function AssetDetailPage() {
     updateMutation.mutate(payload, {
       onSuccess: () => setFeedback(t("common.saved")),
       onError: (mutationError) =>
-        setFeedback(
-          mutationError instanceof Error ? mutationError.message : t("common.saveFailed"),
-        ),
+        setFeedback(apiErrorText(mutationError, t) || t("common.saveFailed")),
     });
   };
 
@@ -203,9 +202,7 @@ export default function AssetDetailPage() {
 
           {analysisMutation.isError ? (
             <p className="text-xs text-red-600">
-              {analysisMutation.error instanceof Error
-                ? analysisMutation.error.message
-                : t("assets.detail.analysisFailed")}
+              {apiErrorText(analysisMutation.error, t) || t("assets.detail.analysisFailed")}
             </p>
           ) : null}
           {analysisMutation.isSuccess ? (

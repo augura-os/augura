@@ -215,19 +215,29 @@ def split_variants(
     payload: SplitRequest, db: DbDep, settings: SettingsDep
 ) -> Envelope[GraphOut]:
     if not payload.variant_ids:
-        raise ApiError(400, "variant_ids 不能为空")
+        raise ApiError(400, "variant_ids 不能为空", code="split_no_variants")
     creative_repo = CreativeRepository(db)
     creative = creative_repo.get(payload.creative_id)
     if creative is None:
-        raise ApiError(404, f"Creative 不存在：{payload.creative_id}")
+        raise ApiError(
+            404,
+            f"Creative 不存在：{payload.creative_id}",
+            code="creative_not_found",
+            params={"id": payload.creative_id},
+        )
 
     variant_repo = VariantRepository(db)
     variants = variant_repo.get_many(payload.variant_ids)
     if len(variants) != len(set(payload.variant_ids)):
-        raise ApiError(404, "部分 Variant 不存在")
+        raise ApiError(404, "部分 Variant 不存在", code="split_variants_not_found")
     for variant in variants:
         if variant.creative_id != creative.id:
-            raise ApiError(400, f"Variant {variant.id} 不属于该 Creative")
+            raise ApiError(
+                400,
+                f"Variant {variant.id} 不属于该 Creative",
+                code="split_variant_mismatch",
+                params={"variant_id": variant.id},
+            )
 
     # P0-3 口径：新族代表向量 = 有向量成员的真实均值（不再拿
     # variants[0].embedding 直接顶包），embedding_count = 参与均值的条数

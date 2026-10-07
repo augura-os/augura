@@ -141,7 +141,9 @@ def update_settings(
     if payload.base_url is not None:
         base_url = payload.base_url.strip()
         if base_url and not base_url.startswith(("http://", "https://")):
-            raise ApiError(400, "base_url 必须以 http:// 或 https:// 开头")
+            raise ApiError(
+                400, "base_url 必须以 http:// 或 https:// 开头", code="settings_base_url_scheme"
+            )
         if base_url:
             repo.set(BASE_URL_SETTING, base_url.rstrip("/"))
     if payload.vision_model is not None and payload.vision_model.strip():
@@ -155,11 +157,16 @@ def update_settings(
                 400,
                 f"未知 embedding 后端：{payload.embedding_backend}"
                 f"（可选：{'/'.join(EMBEDDING_BACKENDS)}）",
+                code="settings_unknown_embedding_backend",
+                params={
+                "backend": payload.embedding_backend,
+                "choices": "/".join(EMBEDDING_BACKENDS),
+                },
             )
         repo.set(EMBEDDING_BACKEND_SETTING, payload.embedding_backend)
     if payload.judge_temperature is not None:
         if not 0.0 <= payload.judge_temperature <= 1.0:
-            raise ApiError(400, "判定温度需在 0–1 之间")
+            raise ApiError(400, "判定温度需在 0–1 之间", code="settings_judge_temperature_range")
         repo.set(JUDGE_TEMPERATURE_SETTING, str(payload.judge_temperature))
     if payload.telemetry_enabled is not None:
         repo.set(
@@ -173,31 +180,61 @@ def update_settings(
     if payload.metric_profile is not None:
         unknown = [m for m in payload.metric_profile if m not in DISPLAY_METRICS]
         if unknown:
-            raise ApiError(400, f"未知显示指标：{', '.join(unknown)}")
+            raise ApiError(
+                400,
+                f"未知显示指标：{', '.join(unknown)}",
+                code="settings_unknown_display_metric",
+                params={"metrics": ", ".join(unknown)},
+            )
         if not payload.metric_profile:
-            raise ApiError(400, "显示指标至少保留一个")
+            raise ApiError(400, "显示指标至少保留一个", code="settings_display_metric_required")
         repo.set(METRIC_PROFILE_SETTING, json.dumps(payload.metric_profile))
     if payload.judge_metrics is not None:
         unknown = [m for m in payload.judge_metrics if m not in JUDGEABLE_METRICS]
         if unknown:
-            raise ApiError(400, f"未知判定指标：{', '.join(unknown)}")
+            raise ApiError(
+                400,
+                f"未知判定指标：{', '.join(unknown)}",
+                code="settings_unknown_judge_metric",
+                params={"metrics": ", ".join(unknown)},
+            )
         repo.set(JUDGE_METRICS_SETTING, json.dumps(payload.judge_metrics))
     if payload.metric_thresholds is not None:
         for key, value in payload.metric_thresholds.items():
             if key not in DEFAULT_THRESHOLDS:
-                raise ApiError(400, f"未知阈值项：{key}")
+                raise ApiError(
+                    400,
+                    f"未知阈值项：{key}",
+                    code="settings_unknown_threshold",
+                    params={"key": key},
+                )
             if value <= 0:
-                raise ApiError(400, f"阈值必须为正数：{key}")
+                raise ApiError(
+                    400,
+                    f"阈值必须为正数：{key}",
+                    code="settings_threshold_not_positive",
+                    params={"key": key},
+                )
         repo.set(METRIC_THRESHOLDS_SETTING, json.dumps(payload.metric_thresholds))
     if payload.market_thresholds is not None:
         for market, entries in payload.market_thresholds.items():
             if not market.strip():
-                raise ApiError(400, "市场标签不能为空")
+                raise ApiError(400, "市场标签不能为空", code="settings_market_label_empty")
             for key, value in entries.items():
                 if key not in DEFAULT_THRESHOLDS:
-                    raise ApiError(400, f"未知阈值项：{market}.{key}")
+                    raise ApiError(
+                        400,
+                        f"未知阈值项：{market}.{key}",
+                        code="settings_unknown_threshold",
+                        params={"key": f"{market}.{key}"},
+                    )
                 if value <= 0:
-                    raise ApiError(400, f"阈值必须为正数：{market}.{key}")
+                    raise ApiError(
+                        400,
+                        f"阈值必须为正数：{market}.{key}",
+                        code="settings_threshold_not_positive",
+                        params={"key": f"{market}.{key}"},
+                    )
         repo.set(
             MARKET_THRESHOLDS_SETTING,
             json.dumps(
@@ -211,23 +248,42 @@ def update_settings(
         )
     if payload.project_category is not None:
         if payload.project_category not in GENRES:
-            raise ApiError(400, f"未知项目品类：{payload.project_category}")
+            raise ApiError(
+                400,
+                f"未知项目品类：{payload.project_category}",
+                code="settings_unknown_category",
+                params={"category": payload.project_category},
+            )
         repo.set(GENRE_SETTING, payload.project_category)
     if payload.score_weights is not None:
         unknown = [k for k in payload.score_weights if k not in _SCORE_WEIGHT_KEYS]
         if unknown:
-            raise ApiError(400, f"未知评分要素：{', '.join(unknown)}")
+            raise ApiError(
+                400,
+                f"未知评分要素：{', '.join(unknown)}",
+                code="settings_unknown_score_factor",
+                params={"factors": ", ".join(unknown)},
+            )
         for key, value in payload.score_weights.items():
             if value <= 0:
-                raise ApiError(400, f"权重必须为正数：{key}")
+                raise ApiError(
+                    400,
+                    f"权重必须为正数：{key}",
+                    code="settings_weight_not_positive",
+                    params={"key": key},
+                )
             repo.set(_SCORE_WEIGHT_KEYS[key], str(value))
     if payload.archive_score_threshold is not None:
         if payload.archive_score_threshold <= 0:
-            raise ApiError(400, "归档评分阈值必须为正数")
+            raise ApiError(
+                400, "归档评分阈值必须为正数", code="settings_archive_threshold_not_positive"
+            )
         repo.set(ARCHIVE_SCORE_THRESHOLD_SETTING, str(payload.archive_score_threshold))
     if payload.archive_idle_days is not None:
         if payload.archive_idle_days <= 0:
-            raise ApiError(400, "归档闲置天数必须为正数")
+            raise ApiError(
+                400, "归档闲置天数必须为正数", code="settings_archive_idle_not_positive"
+            )
         repo.set(ARCHIVE_IDLE_DAYS_SETTING, str(payload.archive_idle_days))
     if payload.lifecycle_auto_enabled is not None:
         repo.set(
@@ -239,7 +295,10 @@ def update_settings(
         bad = [x for x in cleaned if not MARKET_PREFIX_RE.fullmatch(x)]
         if bad:
             raise ApiError(
-                400, f"市场前缀必须是 2-8 位大写字母/下划线：{', '.join(bad)}"
+                400,
+                f"市场前缀必须是 2-8 位大写字母/下划线：{', '.join(bad)}",
+                code="settings_bad_market_prefix",
+                params={"prefixes": ", ".join(bad)},
             )
         repo.set(MARKET_PREFIXES_SETTING, ",".join(cleaned))
     db.commit()
@@ -259,7 +318,7 @@ def list_ai_models(db: DbDep, settings: SettingsDep) -> Envelope[AiModelsInfo]:
     """
     result = list_provider_models(resolve_ai_config(db, settings))
     if not result.ok:
-        raise ApiError(400, result.message)
+        raise ApiError(400, result.message, code=result.code, params=result.params)
     return ok(AiModelsInfo(models=result.models))
 
 
@@ -268,8 +327,15 @@ def test_ai_connection(
     payload: AiTestRequest, db: DbDep, settings: SettingsDep
 ) -> Envelope[AiTestResult]:
     """连接测试：/models 验证 key+URL；带 vision_model 时验证它在列表中。"""
-    ok_flag, message = test_provider_connection(
+    result = test_provider_connection(
         resolve_ai_config(db, settings),
         vision_model=(payload.vision_model or "").strip() or None,
     )
-    return ok(AiTestResult(ok=ok_flag, message=message))
+    return ok(
+        AiTestResult(
+            ok=result.ok,
+            message=result.message,
+            code=result.code,
+            params=result.params or {},
+        )
+    )

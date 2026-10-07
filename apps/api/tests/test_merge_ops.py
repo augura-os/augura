@@ -85,10 +85,13 @@ class TestManualMerge:
     ) -> None:
         source, target = _pair(db_session)
         monkeypatch.setattr(merge_ops, "check_merge", _block_hit)
-        with pytest.raises(ApiError):
+        with pytest.raises(ApiError) as exc_info:
             merge_ops.merge_creatives(
                 db_session, Settings(), source.id, target.id, auto=False,
             )
+        # 结构化错误码：前端按 code 识别守卫拦截（不再匹配中文子串）
+        assert exc_info.value.code == "merge_guard_blocked"
+        assert exc_info.value.params["detail"] == "既定裁决"
         # 未执行：双方都在，无合并日志
         assert db_session.get(Creative, source.id) is not None
         assert db_session.get(Creative, target.id) is not None

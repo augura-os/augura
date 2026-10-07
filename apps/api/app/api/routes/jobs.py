@@ -27,13 +27,25 @@ router = APIRouter()
 def retry_analysis_job(asset_id: str, db: DbDep) -> Envelope[JobInfo]:
     asset = AssetRepository(db).get(asset_id)
     if asset is None:
-        raise ApiError(404, f"素材不存在：{asset_id}")
+        raise ApiError(
+            404,
+            f"素材不存在：{asset_id}",
+            code="asset_not_found",
+            params={"id": asset_id},
+        )
     repo = JobRepository(db)
     job = repo.get_by_asset(asset_id)
     if job is None:
-        raise ApiError(404, "该素材没有分析任务（Excel 不进入分析队列）")
+        raise ApiError(
+            404, "该素材没有分析任务（Excel 不进入分析队列）", code="job_not_found"
+        )
     if job.status not in JOB_RETRYABLE_STATUSES:
-        raise ApiError(409, f"当前任务状态不允许重试：{job.status}")
+        raise ApiError(
+            409,
+            f"当前任务状态不允许重试：{job.status}",
+            code="job_not_retryable",
+            params={"status": job.status},
+        )
 
     job.status = "queued"
     job.attempt = 0

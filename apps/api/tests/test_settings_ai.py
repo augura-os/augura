@@ -87,24 +87,29 @@ class TestListProviderModels:
         _patch_client(monkeypatch, error=_http_error(AuthenticationError, 401))
         result = list_provider_models(_CONFIG)
         assert result.ok is False
+        assert result.code == "ai_key_invalid"
         assert "401" in result.message
 
     def test_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_client(monkeypatch, error=_http_error(APITimeoutError, 0))
         result = list_provider_models(_CONFIG)
         assert result.ok is False
+        assert result.code == "ai_timeout"
+        assert result.params == {"seconds": 10}
         assert "超时" in result.message
 
     def test_connection_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_client(monkeypatch, error=_http_error(APIConnectionError, 0))
         result = list_provider_models(_CONFIG)
         assert result.ok is False
+        assert result.code == "ai_connect_failed"
         assert "连接失败" in result.message
 
     def test_models_endpoint_not_supported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_client(monkeypatch, error=_http_error(APIStatusError, 404))
         result = list_provider_models(_CONFIG)
         assert result.ok is False
+        assert result.code == "ai_models_unsupported"
         assert "不支持模型列表" in result.message
         # 404 最常见的原因是 Base URL 漏了 /v1，提示里必须带这个排查方向
         assert "/v1" in result.message
@@ -115,29 +120,36 @@ class TestListProviderModels:
                      vision_model="", embedding_model="")
         )
         assert result.ok is False
+        assert result.code == "ai_key_not_configured"
         assert "API key" in result.message
 
 
 class TestProviderConnection:
     def test_ok_reports_model_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_client(monkeypatch, model_ids=["model-a", "model-b"])
-        ok, message = settings_service.test_provider_connection(_CONFIG)
-        assert ok is True
-        assert "2 个模型可用" in message
+        result = settings_service.test_provider_connection(_CONFIG)
+        assert result.ok is True
+        assert result.code == "ai_test_ok"
+        assert result.params == {"count": 2}
+        # legacy fallback 文案保留
+        assert "2 个模型可用" in result.message
 
     def test_vision_model_checked(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_client(monkeypatch, model_ids=["model-a"])
-        ok, message = settings_service.test_provider_connection(_CONFIG, vision_model="model-a")
-        assert ok is True
-        ok, message = settings_service.test_provider_connection(_CONFIG, vision_model="model-zzz")
-        assert ok is False
-        assert "model-zzz" in message
+        result = settings_service.test_provider_connection(_CONFIG, vision_model="model-a")
+        assert result.ok is True
+        result = settings_service.test_provider_connection(_CONFIG, vision_model="model-zzz")
+        assert result.ok is False
+        assert result.code == "ai_test_model_missing"
+        assert result.params == {"model": "model-zzz", "count": 1}
+        assert "model-zzz" in result.message
 
     def test_failure_propagates_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_client(monkeypatch, error=_http_error(AuthenticationError, 401))
-        ok, message = settings_service.test_provider_connection(_CONFIG)
-        assert ok is False
-        assert "401" in message
+        result = settings_service.test_provider_connection(_CONFIG)
+        assert result.ok is False
+        assert result.code == "ai_key_invalid"
+        assert "401" in result.message
 
 
 class TestRoutes:

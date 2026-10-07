@@ -103,16 +103,23 @@ MODELS_TIMEOUT_SECONDS = 10
 class ModelListResult:
     ok: bool
     models: list[str]
-    # ok=False 时的人话原因（区分 401 / 超时 / 连接失败 / 端点不支持）
+    # ok=False 时的人话原因（区分 401 / 超时 / 连接失败 / 端点不支持）；
+    # message 保留中文旧文案作 legacy fallback，前端优先按 code 渲染
     message: str = ""
+    code: str = ""
+    params: dict[str, object] | None = None
 
 
 def list_provider_models(config: AIConfig) -> ModelListResult:
     """调 OpenAI 兼容端点的 /models 列出可用模型 id（按字母序）。"""
     if not config.api_key:
-        return ModelListResult(False, [], "API key 未配置，请先保存")
+        return ModelListResult(
+            False, [], "API key 未配置，请先保存", code="ai_key_not_configured"
+        )
     if not config.base_url:
-        return ModelListResult(False, [], "Base URL 未配置，请先保存")
+        return ModelListResult(
+            False, [], "Base URL 未配置，请先保存", code="ai_base_url_not_configured"
+        )
     client = OpenAI(
         api_key=config.api_key,
         base_url=config.base_url,
@@ -122,13 +129,21 @@ def list_provider_models(config: AIConfig) -> ModelListResult:
     try:
         page = client.models.list()
     except AuthenticationError:
-        return ModelListResult(False, [], "API key 无效或已过期（401）")
+        return ModelListResult(
+            False, [], "API key 无效或已过期（401）", code="ai_key_invalid"
+        )
     except APITimeoutError:
         return ModelListResult(
-            False, [], f"连接超时（{MODELS_TIMEOUT_SECONDS} 秒无响应），请检查 Base URL"
+            False,
+            [],
+            f"连接超时（{MODELS_TIMEOUT_SECONDS} 秒无响应），请检查 Base URL",
+            code="ai_timeout",
+            params={"seconds": MODELS_TIMEOUT_SECONDS},
         )
     except APIConnectionError:
-        return ModelListResult(False, [], "连接失败，请检查 Base URL 与网络")
+        return ModelListResult(
+            False, [], "连接失败，请检查 Base URL 与网络", code="ai_connect_failed"
+        )
     except APIStatusError as exc:
         if exc.status_code == 404:
             return ModelListResult(
@@ -137,27 +152,56 @@ def list_provider_models(config: AIConfig) -> ModelListResult:
                 "端点返回 404——请检查 Base URL 是否完整"
                 "（例如 Kimi 是 https://api.moonshot.cn/v1，注意 /v1）；"
                 "若确认 URL 无误，则该端点不支持模型列表，请手填模型名",
+                code="ai_models_unsupported",
             )
-        return ModelListResult(False, [], f"端点返回错误（HTTP {exc.status_code}）")
+        return ModelListResult(
+            False,
+            [],
+            f"端点返回错误（HTTP {exc.status_code}）",
+            code="ai_http_error",
+            params={"status": exc.status_code},
+        )
     models = sorted({model.id for model in page.data})
     if not models:
-        return ModelListResult(False, [], "连接正常，但端点返回的模型列表为空")
+        return ModelListResult(
+            False, [], "连接正常，但端点返回的模型列表为空", code="ai_empty_models"
+        )
     return ModelListResult(True, models)
+
+
+@dataclass(frozen=True)
+class ConnectionTestResult:
+    """POST /settings/ai/test 的结果；message 为中文兜底，code/params 供 i18n。"""
+
+    ok: bool
+    message: str
+    code: str = ""
+    params: dict[str, object] | None = None
 
 
 def test_provider_connection(
     config: AIConfig, vision_model: str | None = None
-) -> tuple[bool, str]:
+) -> ConnectionTestResult:
     """连通性测试：/models 能通 = key+URL 有效；带 vision_model 时验证其在列表中。"""
     result = list_provider_models(config)
     if not result.ok:
-        return False, result.message
-    if vision_model and vision_model not in result.models:
-        return False, (
-            f"连接正常，但模型 {vision_model} 不在列表中"
-            f"（共 {len(result.models)} 个可用）"
+        return ConnectionTestResult(
+            False, result.message, code=result.code, params=result.params
         )
-    return True, f"连接正常（{len(result.models)} 个模型可用）"
+    if vision_model and vision_model not in result.models:
+        return ConnectionTestResult(
+            False,
+            f"连接正常，但模型 {vision_model} 不在列表中"
+            f"（共 {len(result.models)} 个可用）",
+            code="ai_test_model_missing",
+            params={"model": vision_model, "count": len(result.models)},
+        )
+    return ConnectionTestResult(
+        True,
+        f"连接正常（{len(result.models)} 个模型可用）",
+        code="ai_test_ok",
+        params={"count": len(result.models)},
+    )
 
 
 # ---------------------------------------------------------------------------

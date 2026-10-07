@@ -76,10 +76,16 @@ app.add_middleware(
 # ----------------------------------------------------------------------
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"success": False, "data": None, "message": exc.message},
-    )
+    # code/params 为 i18n 结构化字段（增量，旧客户端只看 message）
+    content: dict[str, object] = {
+        "success": False,
+        "data": None,
+        "message": exc.message,
+    }
+    if exc.code:
+        content["code"] = exc.code
+        content["params"] = exc.params
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(RequestValidationError)
@@ -96,6 +102,8 @@ async def validation_error_handler(
             "success": False,
             "data": None,
             "message": f"请求参数错误：{details}",
+            "code": "validation_error",
+            "params": {"details": details},
         },
     )
 
@@ -109,6 +117,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
             "success": False,
             "data": None,
             "message": f"服务器内部错误：{exc}",
+            "code": "internal_error",
         },
     )
 

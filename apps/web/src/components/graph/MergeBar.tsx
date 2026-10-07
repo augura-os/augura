@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { GraphResponse } from "@shared";
 import { useMergeCreatives } from "../../hooks/useGraph";
 import { useGraphStore } from "../../stores/graphStore";
+import { apiErrorText } from "../../lib/apiErrorText";
+import { apiErrorCode } from "../../services/client";
 import { useT } from "../../lib/i18n";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
@@ -56,11 +58,9 @@ export function MergeBar({ graph }: MergeBarProps) {
           setTargetId("");
         },
         onError: (error) => {
-          const message = error instanceof Error ? error.message : "";
-          // 后端 merge_ops 的拦截消息仍是中文（"合并被守卫拦截：…"），此处按原文匹配。
-          // 后端文案翻译为英文时必须同步改成错误码，否则「强制合并」入口会静默失效。
-          if (message.includes("守卫拦截")) {
-            setBlockMessage(message);
+          // 守卫拦截按结构化错误码识别（envelope code），替代中文子串匹配
+          if (apiErrorCode(error) === "merge_guard_blocked") {
+            setBlockMessage(apiErrorText(error, t));
           }
         },
       },
@@ -102,7 +102,7 @@ export function MergeBar({ graph }: MergeBarProps) {
         </Button>
         {mergeMutation.isError ? (
           <p className="text-xs text-red-600">
-            {mergeMutation.error instanceof Error ? mergeMutation.error.message : t("graph.merge.failed")}
+            {apiErrorText(mergeMutation.error, t) || t("graph.merge.failed")}
           </p>
         ) : null}
       </div>

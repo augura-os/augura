@@ -217,6 +217,10 @@ class TestScoreAndSuggest:
         assert alpha.kind == "rule_keyword"
         assert alpha.rule_keyword.target == "mechanic"
         assert alpha.rule_keyword.support == 5
+        # i18n 结构化文案：前端按 code 渲染，reason 为中文兜底
+        assert alpha.reason_code == "rule_keyword"
+        assert alpha.reason_params["word"] == "alpha"
+        assert alpha.reason_params["target"] == "mechanic"
         assert "判别力" in alpha.reason
 
 

@@ -43,7 +43,13 @@ router = APIRouter()
 def _get_asset_or_404(db: Session, asset_id: str) -> CreativeAsset:
     asset = AssetRepository(db).get(asset_id)
     if asset is None:
-        raise ApiError(404, f"素材不存在：{asset_id}")
+        # message 保留中文旧文案作 legacy fallback；前端按 code 渲染
+        raise ApiError(
+            404,
+            f"素材不存在：{asset_id}",
+            code="asset_not_found",
+            params={"id": asset_id},
+        )
     return asset
 
 
@@ -269,7 +275,9 @@ def update_asset(
 ) -> Envelope[AssetDetail]:
     asset = _get_asset_or_404(db, asset_id)
     if asset.file_type == "excel":
-        raise ApiError(400, "Excel 素材没有可编辑的 AI 分析结果")
+        raise ApiError(
+            400, "Excel 素材没有可编辑的 AI 分析结果", code="asset_excel_no_analysis"
+        )
 
     analysis_repo = AnalysisRepository(db)
     old_analysis = analysis_repo.get_by_asset(asset.id)

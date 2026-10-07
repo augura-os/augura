@@ -50,26 +50,43 @@ def merge_creatives(
     F3 短事务纪律）。
     """
     if source_creative_id == target_creative_id:
-        raise ApiError(400, "不能与自身合并（source 与 target 相同）")
+        raise ApiError(
+            400, "不能与自身合并（source 与 target 相同）", code="merge_self"
+        )
     creative_repo = CreativeRepository(db)
     source = creative_repo.get(source_creative_id)
     if source is None:
-        raise ApiError(404, f"Creative 不存在：{source_creative_id}")
+        raise ApiError(
+            404,
+            f"Creative 不存在：{source_creative_id}",
+            code="creative_not_found",
+            params={"id": source_creative_id},
+        )
     target = creative_repo.get(target_creative_id)
     if target is None:
-        raise ApiError(404, f"Creative 不存在：{target_creative_id}")
+        raise ApiError(
+            404,
+            f"Creative 不存在：{target_creative_id}",
+            code="creative_not_found",
+            params={"id": target_creative_id},
+        )
 
     # Merge guard（案例 13 教训）：既定"维持拆分"裁决被推翻时必须带理由。
     hits = check_merge(source, target, db)
     blocks = [hit for hit in hits if hit.level == "block"]
     if blocks:
+        detail = "；".join(hit.message for hit in blocks)
         if auto:
             # 自动合并无 force 概念：任何 block 都直接不执行
-            raise MergeBlocked("；".join(hit.message for hit in blocks))
+            raise MergeBlocked(detail)
         if not force_reason.strip():
+            # code 供前端识别"守卫拦截"（替代中文子串匹配）；
+            # message 保留中文旧文案作 legacy 兜底
             raise ApiError(
                 400,
-                "合并被守卫拦截：" + "；".join(hit.message for hit in blocks),
+                "合并被守卫拦截：" + detail,
+                code="merge_guard_blocked",
+                params={"detail": detail},
             )
 
     variant_repo = VariantRepository(db)

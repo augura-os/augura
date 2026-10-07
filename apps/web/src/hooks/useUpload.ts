@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from "react";
+import type { SkippedFile, UploadWarning } from "@shared";
 import { uploadFile } from "../services/api";
-import { translate } from "../lib/i18n";
+import { apiErrorText } from "../lib/apiErrorText";
+import { getLang, translate } from "../lib/i18n";
 
 export type UploadStatus = "queued" | "uploading" | "success" | "skipped" | "error";
 
@@ -40,6 +42,33 @@ function patchItem(
   setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
 }
 
+/** 跳过原因：优先按 code 查 upload.skip.* 模板；缺码/缺模板回退后端 reason。 */
+function skippedReasonText(skipped: SkippedFile): string {
+  const code = skipped.code?.replace(/^upload_/, "") ?? "";
+  const key = `upload.skip.${code}`;
+  const template = code ? translate(key) : key;
+  return template !== key ? template : skipped.reason;
+}
+
+/** 重叠警告：优先按 code 查 upload.warning.* 模板插值；回退后端 message。 */
+function warningText(warning: UploadWarning): string {
+  const key = `upload.warning.${warning.code.replace(/^upload_/, "")}`;
+  const template = translate(key);
+  if (template === key) return warning.message;
+  const params = warning.params ?? {};
+  const files = Array.isArray(params.files) ? params.files.map(String) : [];
+  const filesText =
+    getLang() === "zh"
+      ? files.map((name) => `《${name}》`).join("、")
+      : files.map((name) => `"${name}"`).join(", ");
+  return template
+    .replace("{filename}", String(params.filename ?? ""))
+    .replace("{files}", filesText)
+    .replace("{date_min}", String(params.date_min ?? ""))
+    .replace("{date_max}", String(params.date_max ?? ""))
+    .replace("{rows}", String(params.rows ?? ""));
+}
+
 async function uploadOne(
   setItems: React.Dispatch<React.SetStateAction<UploadItem[]>>,
   id: string,
@@ -54,12 +83,12 @@ async function uploadOne(
       patchItem(setItems, id, {
         status: "skipped",
         progress: 100,
-        message: result.skipped[0].reason,
+        message: skippedReasonText(result.skipped[0]),
       });
       return;
     }
     const skippedNote = result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : "";
-    const warningNote = result.warnings.length > 0 ? ` · ⚠️ ${result.warnings[0]}` : "";
+    const warningNote = result.warnings.length > 0 ? ` · ⚠️ ${warningText(result.warnings[0])}` : "";
     patchItem(setItems, id, {
       status: "success",
       progress: 100,
@@ -68,7 +97,7 @@ async function uploadOne(
   } catch (error) {
     patchItem(setItems, id, {
       status: "error",
-      message: error instanceof Error ? error.message : "Upload failed",
+      message: apiErrorText(error, translate) || "Upload failed",
     });
   }
 }

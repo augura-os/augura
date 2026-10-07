@@ -12,6 +12,10 @@ export interface ApiResponse<T> {
   success: boolean;
   data: T | null;
   message: string;
+  /** i18n 结构化错误码（仅失败响应携带；前端查 error.<code> 模板渲染） */
+  code?: string;
+  /** 模板插值参数（原始值，前端自行格式化） */
+  params?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +223,10 @@ export interface ReviewItem {
   kind: ReviewKind;
   title: string;
   reason: string;
+  /** i18n：前端查 inbox.reason.<code> / inbox.title.<code> 模板插值渲染；
+   * 缺模板或 code 为空时回退 reason/title 旧文案 */
+  reason_code?: string | null;
+  reason_params?: Record<string, number | string | null>;
   creative_id: string | null;
   creative_name: string | null;
   asset_id: string | null;
@@ -472,7 +480,11 @@ export interface AiModelsInfo {
 /** POST /settings/ai/test：连接测试结果（ok=false 时 message 是人话原因） */
 export interface AiTestResult {
   ok: boolean;
+  /** legacy 中文兜底文案；前端优先按 code + params 渲染 */
   message: string;
+  /** i18n 码（settings.aiTest.* / error.* 模板）；空串 = 无码直接显示 message */
+  code?: string;
+  params?: Record<string, number | string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,13 +516,23 @@ export interface SplitRequest {
 /** POST /upload response — the created assets. */
 export interface SkippedFile {
   filename: string;
+  /** legacy 中文兜底文案；前端优先按 code 渲染 */
   reason: string;
+  /** i18n 码（upload.skip.<code 去掉 upload_ 前缀> 模板） */
+  code?: string | null;
+}
+
+/** Excel 窗口重叠警告：code + params 供前端 i18n，message 为中文兜底。 */
+export interface UploadWarning {
+  code: string;
+  message: string;
+  params: Record<string, number | string | string[] | null>;
 }
 
 export interface UploadResult {
   uploaded: AssetListItem[];
   skipped: SkippedFile[];
-  warnings: string[];
+  warnings: UploadWarning[];
 }
 
 export type UploadResponse = UploadResult;

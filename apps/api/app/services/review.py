@@ -96,10 +96,16 @@ def low_confidence_items(db: Session) -> list[ReviewItem]:
         ReviewItem(
             kind="low_confidence",
             title=asset.filename,
+            # reason 保留中文旧文案作 legacy fallback；前端优先按 code 渲染
             reason=(
                 f"AI 置信度 {analysis.confidence:.2f} 低于 "
                 f"{LOW_CONFIDENCE_THRESHOLD}，需人工复核"
             ),
+            reason_code="low_confidence",
+            reason_params={
+                "confidence": analysis.confidence,
+                "threshold": LOW_CONFIDENCE_THRESHOLD,
+            },
             asset_id=asset.id,
         )
         for analysis, asset in db.execute(stmt).all()
@@ -142,7 +148,10 @@ def dna_unassigned_items(db: Session) -> list[ReviewItem]:
             ReviewItem(
                 kind="dna_unassigned",
                 title=creative.name,
+                # legacy fallback：旧客户端直接渲染 reason
                 reason=f"未归族 DNA（{len(variants)} 个 Variant），需人工确认家族",
+                reason_code="dna_unassigned",
+                reason_params={"variant_count": len(variants)},
                 creative_id=creative.id,
                 creative_name=creative.name,
                 suggestion=suggestion_text,
@@ -175,10 +184,13 @@ def market_conflict_items(db: Session) -> list[ReviewItem]:
             ReviewItem(
                 kind="market_conflict",
                 title=name,
+                # legacy fallback：旧客户端直接渲染 reason
                 reason=(
                     f"文件名前缀市场（{market or '无'}）与 AI 分析识别的市场标签"
                     "不一致，请核对文件名；核对前该创意不计入市场基准"
                 ),
+                reason_code="market_conflict",
+                reason_params={"market": market or None},
                 creative_id=creative_id,
                 creative_name=name,
             )
@@ -271,7 +283,9 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
             ReviewItem(
                 kind="merge_candidate",
                 title=f"{first_creative.name} ↔ {other_name}",
+                # legacy fallback：旧客户端直接渲染 reason
                 reason="多市场文件名相同但分属不同 Creative（语言对未合并）",
+                reason_code="multi_market_same_name",
                 creative_id=first_creative.id,
                 creative_name=first_creative.name,
                 related_creative_id=other_id,
@@ -327,7 +341,10 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
             ReviewItem(
                 kind="merge_candidate",
                 title=f"{left.name} ↔ {right.name}",
+                # legacy fallback：旧客户端直接渲染 reason
                 reason=f"相似度 {score:.2f}，未达自动合并阈值 {BORDERLINE_HIGH}，疑似同创意",
+                reason_code="merge_similarity",
+                reason_params={"score": score, "threshold": BORDERLINE_HIGH},
                 creative_id=left.id,
                 creative_name=left.name,
                 related_creative_id=right.id,
@@ -359,7 +376,9 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
             ReviewItem(
                 kind="merge_candidate",
                 title=f"{left.name} ↔ {right.name}",
+                # legacy fallback：旧客户端直接渲染 reason
                 reason="扫描器召回（视觉/分析证据），LLM 建议合并",
+                reason_code="scanner_recall",
                 creative_id=left.id,
                 creative_name=left.name,
                 related_creative_id=right.id,
@@ -404,21 +423,43 @@ def observation_pair_items(
             (target.id, source.id)
         )
 
-        def _brief(creative: Creative) -> str:
+        def _brief(creative: Creative) -> tuple[str, float, float | None]:
+            """（名称, 消耗, cpp）原始值——i18n 参数与 legacy 文案共用同一份。"""
             rows = rec.collect_creative_performance(
                 db, creative, all_performances=all_performances
             )
             metrics = rec.aggregate(
                 creative, None, None, rows, max_date=max_date, variant_count=1
             )
-            cpp = f"${metrics.cpp:,.2f}" if metrics.cpp else "-"
-            return f"{creative.name}（消耗 ${metrics.spend:,.0f} / 成本 {cpp}）"
+            return creative.name, metrics.spend, metrics.cpp
 
+        def _brief_text(brief: tuple[str, float, float | None]) -> str:
+            name, spend, cpp = brief
+            cpp_s = f"${cpp:,.2f}" if cpp else "-"
+            return f"{name}（消耗 ${spend:,.0f} / 成本 {cpp_s}）"
+
+        source_brief = _brief(source)
+        target_brief = _brief(target)
         items.append(
             ReviewItem(
                 kind="observation_pair",
                 title=f"{source.name} ↔ {target.name}",
-                reason="观察对未结案：" + _brief(source) + " vs " + _brief(target),
+                # legacy fallback：旧客户端直接渲染 reason
+                reason=(
+                    "观察对未结案："
+                    + _brief_text(source_brief)
+                    + " vs "
+                    + _brief_text(target_brief)
+                ),
+                reason_code="observation_open",
+                reason_params={
+                    "source_name": source_brief[0],
+                    "source_spend": source_brief[1],
+                    "source_cpp": source_brief[2],
+                    "target_name": target_brief[0],
+                    "target_spend": target_brief[1],
+                    "target_cpp": target_brief[2],
+                },
                 creative_id=source.id,
                 creative_name=source.name,
                 related_creative_id=target.id,
@@ -467,9 +508,10 @@ def pending_verdict_items(
         source_brief = variant_brief(db, source, all_performances=all_performances)
         target_brief = variant_brief(db, target, all_performances=all_performances)
         if source_brief.cpp is not None and target_brief.cpp is not None:
-            delta = target_brief.cpp - source_brief.cpp
+            delta: float | None = target_brief.cpp - source_brief.cpp
             delta_s = f"成本差 {delta:+.2f}"
         else:
+            delta = None
             delta_s = "数据不足"
         title = (
             f"{creative.name}：{source.name[:18]} "
@@ -480,7 +522,10 @@ def pending_verdict_items(
             ReviewItem(
                 kind="pending_verdict",
                 title=title,
+                # legacy fallback：旧客户端直接渲染 reason
                 reason=f"裂变实验待判定（{delta_s}）",
+                reason_code="derivation_pending_judge",
+                reason_params={"cpp_delta": delta},
                 creative_id=creative.id,
                 creative_name=creative.name,
                 derivation_id=derivation.id,
@@ -537,14 +582,24 @@ def derivation_review_items(db: Session) -> list[ReviewItem]:
             f"-[{derivation.factor}]-> {target.name[:18]}"
         )
         if suggestion.verdict == "not-a-derivation":
+            reason_code = "mislink_suspect"
+            reason_params: dict[str, object] = {"reason": suggestion.reason}
             reason = f"疑似误链：{suggestion.reason}"
         else:
+            reason_code = "factor_suggestion"
+            reason_params = {
+                "verdict": suggestion.verdict,
+                "reason": suggestion.reason,
+            }
             reason = f"因子建议改为 {suggestion.verdict}：{suggestion.reason}"
         items.append(
             ReviewItem(
                 kind="derivation_review",
                 title=title,
+                # legacy fallback：旧客户端直接渲染 reason
                 reason=reason,
+                reason_code=reason_code,
+                reason_params=reason_params,
                 creative_id=creative.id if creative else None,
                 creative_name=creative.name if creative else None,
                 derivation_id=derivation.id,
@@ -636,12 +691,22 @@ def archive_suggestion_items(db: Session) -> list[ReviewItem]:
             ReviewItem(
                 kind="archive_suggestion",
                 title=metrics.creative_name,
+                # legacy fallback：旧客户端直接渲染 reason
                 reason=(
                     f"评分 {score.total:.0f}（效果 {score.performance:.0f} / "
                     f"新鲜 {score.freshness:.0f} / 演化 {score.evolution:.0f} / "
                     f"置信 {score.confidence:.0f}），"
                     f"已 {metrics.days_idle} 天无消耗，建议归档"
                 ),
+                reason_code="archive_suggestion",
+                reason_params={
+                    "score": score.total,
+                    "performance": score.performance,
+                    "freshness": score.freshness,
+                    "evolution": score.evolution,
+                    "confidence": score.confidence,
+                    "days_idle": metrics.days_idle,
+                },
                 creative_id=creative_id,
                 creative_name=metrics.creative_name,
             )
@@ -655,8 +720,11 @@ def threshold_calibration_items(db: Session) -> list[ReviewItem]:
     return [
         ReviewItem(
             kind="threshold_calibration",
+            # title 中文常量 → 前端按 inbox.title.threshold_calibration 渲染；
+            # reason 来自 judge_suggestions 库存文本，保持原样（旧数据兜底）
             title="合并阈值校准",
             reason=row.reason,
+            reason_code="threshold_calibration",
         )
         for row in db.scalars(
             select(JudgeSuggestion).where(
@@ -671,8 +739,12 @@ def market_detect_items(db: Session) -> list[ReviewItem]:
     return [
         ReviewItem(
             kind="market_detect",
+            # title 中文前缀 → 前端按 inbox.title.market_detect 渲染；
+            # Settings 页取 reason_params.prefix（不再剥离中文前缀字符串）
             title=f"市场前缀 {row.verdict}",
             reason=row.reason,
+            reason_code="market_detect",
+            reason_params={"prefix": row.verdict},
         )
         for row in db.scalars(
             select(JudgeSuggestion).where(JudgeSuggestion.kind == "market_detect")
@@ -685,10 +757,17 @@ def auto_brake_items(db: Session) -> list[ReviewItem]:
     return [
         ReviewItem(
             kind="auto_brake",
+            # title 中文常量 → 前端按 inbox.title.<reason_code> 渲染；
+            # reason 来自 judge_suggestions 库存文本，保持原样（旧数据兜底）
             title=(
                 "自动判定刹车生效" if row.verdict == "downgraded" else "自动判定已恢复"
             ),
             reason=row.reason,
+            reason_code=(
+                "auto_brake_downgraded"
+                if row.verdict == "downgraded"
+                else "auto_brake_recovered"
+            ),
         )
         for row in db.scalars(
             select(JudgeSuggestion)
@@ -735,12 +814,22 @@ def rule_keyword_items(db: Session) -> list[ReviewItem]:
         items.append(
             ReviewItem(
                 kind="rule_keyword",
+                # legacy fallback：旧客户端直接渲染 title/reason
                 title=f"{proposal.word}（{label}）",
                 reason=(
                     f"判别力 {proposal.score:.2f}：同族对命中率 "
                     f"{proposal.same_pair_rate:.0%} / 跨族对 "
                     f"{proposal.cross_pair_rate:.0%}，样本 {proposal.support} 条"
                 ),
+                reason_code="rule_keyword",
+                reason_params={
+                    "word": proposal.word,
+                    "target": proposal.target,
+                    "score": proposal.score,
+                    "same_pair_rate": proposal.same_pair_rate,
+                    "cross_pair_rate": proposal.cross_pair_rate,
+                    "support": proposal.support,
+                },
                 rule_keyword=proposal,
             )
         )

@@ -130,3 +130,14 @@ export function priorityText(
     .replace("{dollars}", formatDollars(item.priority_dollars))
     .replace("{pct}", String(Math.round(item.confidence * 100)));
 }
+
+/**
+ * 赢家标签徽章文案：brief.label.<code> 模板；缺模板（未来新码/旧数据）
+ * 回退原始码，永远有内容可显示。
+ */
+export function briefLabel(code: string, t: (key: string) => string): string {
+  if (!code) return "";
+  const key = `brief.label.${code}`;
+  const label = t(key);
+  return label === key ? code : label;
+}

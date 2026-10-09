@@ -6,12 +6,16 @@ recommendation / priority / review / creative_score 等消费方共用本模块�
 
 | 指标 | 口径 |
 | --- | --- |
-| spend / installs / impressions / payers | 行级求和；payers 从 raw JSONB 经 metrics_from_raw 解析 |
+| spend / installs / impressions / clicks / payers | 行级求和；payers 从 raw JSONB 解析 |
 | cpp | spend / payers（ratio of sums；无付费为 None） |
 | cpi | spend / installs（ratio of sums；无安装为 None） |
+| ctr | clicks / impressions（ratio of sums；无曝光为 None），派生 property |
 | roas（d1_roas）/ d3_roas / d1_retention / ipm | 行级比值的消耗加权平均（见下注） |
 | days_idle | 最近数据行距全库最大日期的天数；无数据为 None |
 | recent_spend / recent_cpp | 近 RECENT_WINDOW_DAYS（7）天窗口，相对全库最大日期 |
+| prev_spend | max_date 前 8–14 天窗口消耗求和；recent < 0.5 × prev ≈ 消耗腰斩 |
+| market_count | 派生注入（build_report）：投放行的 distinct 市场数；无投放为 0 |
+| spend_share / payer_share | 单 creative ÷ 全库合计（distribution_hint 按最新快照 metrics 算） |
 | main_market | 派生注入（build_report），非本模块计算 |
 
 注：消耗加权平均 = spend-weighted row mean，非 ratio of sums——有意为之，
@@ -66,6 +70,7 @@ def aggregate(
     spend = sum(row.spend for row in rows)
     installs = sum(row.installs for row in rows)
     impressions = sum(row.impressions for row in rows)
+    clicks = sum(row.clicks for row in rows)
     payers = 0
     for row in rows:
         value = metrics_from_raw(row.raw or {})["payers"]
@@ -77,13 +82,20 @@ def aggregate(
 
     recent_spend = 0.0
     recent_payers = 0
+    prev_spend = 0.0
     if max_date is not None:
         window_start = max_date - timedelta(days=RECENT_WINDOW_DAYS)
+        # prev 窗口：紧邻 recent 之前的等长 7 天（max_date 前 8–14 天）
+        prev_window_start = max_date - timedelta(days=RECENT_WINDOW_DAYS * 2)
         for row in rows:
-            if row.date is not None and row.date > window_start:
+            if row.date is None:
+                continue
+            if row.date > window_start:
                 recent_spend += row.spend
                 value = metrics_from_raw(row.raw or {})["payers"]
                 recent_payers += int(value or 0)
+            elif row.date > prev_window_start:
+                prev_spend += row.spend
     recent_cpp = recent_spend / recent_payers if recent_payers else None
 
     return CreativeMetrics(
@@ -95,6 +107,7 @@ def aggregate(
         payers=payers,
         installs=installs,
         impressions=impressions,
+        clicks=clicks,
         cpp=cpp,
         roas=_weighted_metric(rows, "d1_roas"),
         cpi=spend / installs if installs else None,
@@ -105,6 +118,7 @@ def aggregate(
         days_idle=days_idle,
         recent_spend=recent_spend,
         recent_cpp=recent_cpp,
+        prev_spend=prev_spend,
         variant_count=variant_count,
         observation_partners=list(observation_partners),
         derivation_count=derivation_count,

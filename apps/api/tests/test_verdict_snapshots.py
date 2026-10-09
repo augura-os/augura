@@ -24,8 +24,10 @@ from app.models import (
 from app.repositories.settings import SettingsRepository
 from app.repositories.verdict_snapshots import VerdictSnapshotRepository
 from app.services.daily_brief import refresh_creative_states
+from app.services.recommendation import CreativeMetrics, Verdict
 from app.services.recommendation_rules import RULES_VERSION
 from app.services.settings import METRIC_THRESHOLDS_SETTING
+from app.services.verdict_snapshots import write_snapshots
 
 
 def _seed_creative(db: Session) -> Creative:
@@ -85,10 +87,12 @@ class TestVerdictSnapshots:
         assert isinstance(snap.priority_dollars, float)
         assert isinstance(snap.confidence, float)
         # 判定输入：规则版本 / 阈值 / 指标同口径落库
-        assert snap.rules_version == RULES_VERSION == "rules-v1"
+        assert snap.rules_version == RULES_VERSION == "rules-v2"
         assert snap.thresholds["cpp_red_line"] == 120.0
         assert snap.metrics["spend"] == 1000.0
         assert snap.metrics["payers"] == 5
+        # 赢家标签（rules-v2）：0 曝光触发 underexplored 短路门
+        assert snap.labels == ["underexplored"]
         assert len(snap.content_hash) == 64
 
     def test_second_refresh_without_changes_is_idempotent(
@@ -152,3 +156,46 @@ class TestVerdictSnapshots:
         db_session.delete(creative)
         db_session.flush()
         assert _snapshot_count(db_session) == 0
+
+    def test_labels_participate_in_content_hash(self, db_session: Session) -> None:
+        """labels 变化（其余输入不变）→ 新快照行；labels 稳定 → 幂等。"""
+        import dataclasses
+
+        creative = Creative(id=str(uuid.uuid4()), name="KS_FAKE-labels-hash")
+        db_session.add(creative)
+        db_session.flush()
+        metrics = CreativeMetrics(
+            creative_id=creative.id,
+            creative_name=creative.name,
+            dna_code=None,
+            dna_name=None,
+            spend=100.0,
+            payers=5,
+            installs=10,
+            cpp=20.0,
+            roas=0.03,
+            cpi=None,
+            ipm=None,
+            row_count=1,
+            days_idle=0,
+            recent_spend=100.0,
+            recent_cpp=20.0,
+            variant_count=1,
+        )
+        verdict = Verdict(
+            action="KEEP", reason_code="keep_healthy", params={}, reasons=["ok"]
+        )
+        assert write_snapshots(db_session, [(metrics, verdict)]) == 1
+        latest = VerdictSnapshotRepository(db_session).latest_for_creative(creative.id)
+        assert latest is not None and latest.labels == []
+
+        # 同样的 metrics/action，仅 labels 变化 → 指纹变 → 新行
+        labeled = dataclasses.replace(verdict, labels=["proven_winner"])
+        assert write_snapshots(db_session, [(metrics, labeled)]) == 1
+        assert _snapshot_count(db_session) == 2
+        latest = VerdictSnapshotRepository(db_session).latest_for_creative(creative.id)
+        assert latest is not None and latest.labels == ["proven_winner"]
+
+        # labels 稳定后再次幂等
+        assert write_snapshots(db_session, [(metrics, labeled)]) == 0
+        assert _snapshot_count(db_session) == 2

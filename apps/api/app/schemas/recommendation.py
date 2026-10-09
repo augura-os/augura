@@ -52,6 +52,8 @@ class RecommendationItem(BaseModel):
     # 补充理由（只读上下文，不影响判定）：前端按 brief.bit.<code> 渲染，
     # 缺模板/为空时回退 reasons[1:] 中文文案（兼容旧数据）
     reason_bits: list[ReasonBitModel] = Field(default_factory=list)
+    # 赢家七分类标签（LabelCode；不影响判定）：前端按 brief.label.<code> 渲染徽章
+    labels: list[str] = Field(default_factory=list)
     # 货币化 priority（services/priority）：这条建议的日度金额 + 后验把握
     priority_dollars: float = 0.0
     confidence: float = 0.0

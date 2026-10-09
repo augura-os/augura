@@ -20,7 +20,7 @@ import { shortAssetLabel } from "../../lib/short-name";
 import { useMetricConfig } from "../../hooks/useMetricConfig";
 import { apiErrorText } from "../../lib/apiErrorText";
 import { useT } from "../../lib/i18n";
-import { recommendationLines } from "./briefLine";
+import { briefLabel, recommendationLines } from "./briefLine";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -282,6 +282,15 @@ function CreativePanel({ node, graph }: { node: GraphNodeDTO; graph: GraphRespon
             >
               {recommendation.action}
             </Badge>
+            {(recommendation.labels ?? []).map((code) => (
+              <Badge
+                key={code}
+                variant="secondary"
+                className="ml-1 bg-indigo-100 text-indigo-700"
+              >
+                {briefLabel(code, t)}
+              </Badge>
+            ))}
           </p>
           <ul className="list-disc space-y-1 pl-4 text-xs text-neutral-600">
             {recommendationLines(recommendation, t).map((reason, index) => (

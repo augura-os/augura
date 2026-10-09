@@ -19,6 +19,7 @@ Four categories:
 - pending_verdicts:  裂变边待人工判定有效/无效（轻量实验复核）
 - derivation_reviews: 测量层/LLM 对裂变因子的复核建议（judge_suggestions
                      kind="derivation-factor"）：疑似误链待解链、因子建议待采纳
+- distribution_hints: 定性分发诊断（最新 verdict 快照的份额对比；仅建议级）
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from app.models import (
     Performance,
     SplitRuling,
 )
+from app.repositories.verdict_snapshots import VerdictSnapshotRepository
 from app.schemas.review import (
     FamilyBootstrapHint,
     FamilyMember,
@@ -58,6 +60,8 @@ LOW_CONFIDENCE_THRESHOLD = 0.7
 BORDERLINE_LOW = 0.20
 BORDERLINE_HIGH = TEXT_CLUSTER_THRESHOLD  # 0.34
 BORDERLINE_LIMIT = 20
+# 分发诊断全局闸门：全库付费合计低于此值时份额无统计意义，整体静默
+DISTRIBUTION_MIN_TOTAL_PAYERS = 20
 
 def _market_key(
     filename: str, prefixes: tuple[str, ...] | None = None
@@ -778,6 +782,92 @@ def auto_brake_items(db: Session) -> list[ReviewItem]:
 
 
 _RULE_TARGET_LABELS = {"mechanic": "机制词", "hook": "钩子词", "generic": "通用词"}
+
+
+def distribution_hint_items(db: Session) -> list[ReviewItem]:
+    """定性分发诊断（仅建议级）：份额视角补规则引擎的绝对阈值视角。
+
+    数据源 = 每个 creative 最新一条 verdict_snapshot 的 metrics JSONB——
+    不重聚合 Performance：诊断与"快照刷新后生效"语义一致（GET 纯读，
+    快照由 refresh 写路径产出），且份额口径（spend_share/payer_share，
+    见 services/metrics 口径注册表）天然基于同一截面。
+
+    全局闸门：Σpayers < DISTRIBUTION_MIN_TOTAL_PAYERS 时整体静默——
+    全库付费太少时份额无统计意义，提示只会是噪声。
+
+    两类（文案不含任何效率百分比，只给方向与建议）：
+    - 疑似分发不足：payer_share ≥ 2 × spend_share 且 payers ≥ 3 且
+      spend < 起量线——单位消耗产出显著高于均值但消耗份额偏低；
+    - 预算吞噬待复核：spend_share ≥ 10 × payer_share 且 spend ≥ 起量线——
+      与 cpp_over_red_weak_roas 互补（相对份额 vs 绝对红线）。
+    """
+    snapshots = VerdictSnapshotRepository(db).latest_per_creative()
+    if not snapshots:
+        return []
+    briefs: list[tuple[str, float, int]] = []  # (creative_id, spend, payers)
+    for snapshot in snapshots:
+        metrics = snapshot.metrics or {}
+        try:
+            spend = float(metrics.get("spend") or 0.0)
+            payers = int(metrics.get("payers") or 0)
+        except (TypeError, ValueError):
+            continue  # 旧/坏快照行不进诊断（不挡其他 creative 浮出）
+        briefs.append((snapshot.creative_id, spend, payers))
+    total_spend = sum(spend for _id, spend, _p in briefs)
+    total_payers = sum(payers for _id, _s, payers in briefs)
+    if total_payers < DISTRIBUTION_MIN_TOTAL_PAYERS or total_spend <= 0:
+        return []
+    names = {
+        c.id: c.name for c in db.scalars(select(Creative)).all()
+    }
+    items: list[ReviewItem] = []
+    for creative_id, spend, payers in briefs:
+        name = names.get(creative_id)
+        if name is None:
+            continue
+        spend_share = spend / total_spend
+        payer_share = payers / total_payers
+        if (
+            payer_share >= 2 * spend_share
+            and payers >= 3
+            and spend < rec.SPEND_SIGNIFICANT
+        ):
+            items.append(
+                ReviewItem(
+                    kind="distribution_hint",
+                    title=name,
+                    # legacy fallback：旧客户端直接渲染 reason
+                    reason=(
+                        "单位消耗产出显著高于均值但消耗份额偏低，"
+                        "可能未获充分分发，建议加注验证"
+                    ),
+                    reason_code="distribution_under_served",
+                    reason_params={"spend": spend, "payers": payers},
+                    creative_id=creative_id,
+                    creative_name=name,
+                )
+            )
+        elif (
+            spend_share >= 10 * payer_share
+            and spend >= rec.SPEND_SIGNIFICANT
+        ):
+            items.append(
+                ReviewItem(
+                    kind="distribution_hint",
+                    title=name,
+                    # legacy fallback：旧客户端直接渲染 reason
+                    reason=(
+                        "消耗份额远高于付费份额，预算可能被低效吞噬，"
+                        "建议复核该创意的预算分配"
+                    ),
+                    reason_code="distribution_budget_review",
+                    reason_params={"spend": spend, "payers": payers},
+                    creative_id=creative_id,
+                    creative_name=name,
+                )
+            )
+    items.sort(key=lambda item: item.title)
+    return items
 
 
 def rule_keyword_items(db: Session) -> list[ReviewItem]:

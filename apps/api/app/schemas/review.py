@@ -21,6 +21,7 @@ ReviewKind = Literal[
     "family_bootstrap",
     "auto_brake",
     "rule_keyword",
+    "distribution_hint",
 ]
 
 
@@ -161,6 +162,8 @@ class ReviewQueue(BaseModel):
     auto_brakes: list[ReviewItem] = Field(default_factory=list)
     # 规则词建议（人工改判挖出的候选词，确认才落 settings 词表）
     rule_keywords: list[ReviewItem] = Field(default_factory=list)
+    # 定性分发诊断（份额视角，仅建议级；数据源为最新 verdict 快照）
+    distribution_hints: list[ReviewItem] = Field(default_factory=list)
     # 稳态增量扩族提示（散点攒够一批时建议运行智能建族）
     family_bootstrap_hint: FamilyBootstrapHint = Field(
         default_factory=FamilyBootstrapHint

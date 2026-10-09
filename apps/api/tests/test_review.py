@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,10 +15,12 @@ from app.models import (
     CreativeVariant,
     JudgeSuggestion,
     VariantDerivation,
+    VerdictSnapshot,
 )
 from app.services.review import (
     _market_key,
     derivation_review_items,
+    distribution_hint_items,
     dna_unassigned_items,
     low_confidence_items,
     merge_candidate_items,
@@ -441,3 +444,105 @@ class TestDerivationReviewItems:
             i for i in merge_candidate_items(db_session)
             if {left.id, right.id} == {i.creative_id, i.related_creative_id}
         ] == []
+
+
+class TestDistributionHints:
+    """定性分发诊断（distribution_hint_items）：数据源 = 每 creative 最新快照的
+    metrics JSONB；全局 Σpayers < 20 静默；两类条件各命中 + 边界不命中。"""
+
+    def _snapshot(
+        self, db: Session, creative: Creative, *, spend: float, payers: int
+    ) -> None:
+        db.add(
+            VerdictSnapshot(
+                id=str(uuid.uuid4()),
+                creative_id=creative.id,
+                action="KEEP",
+                reason_code="keep_healthy",
+                rules_version="rules-v2",
+                content_hash=uuid.uuid4().hex,
+                metrics={"spend": spend, "payers": payers},
+            )
+        )
+
+    def _seed_mix(self, db: Session) -> dict[str, Creative]:
+        creatives = {}
+        for name, spend, payers in (
+            # A：payer_share 36% vs spend_share 1.4%，消耗 < 起量线 → 分发不足
+            ("KS_FAKE-dist-a", 100.0, 8),
+            # B：spend_share 56% vs payer_share 4.5%，消耗 ≥ 起量线 → 预算吞噬
+            ("KS_FAKE-dist-b", 4000.0, 1),
+            # C：份额基本对齐 → 中性，不出提示
+            ("KS_FAKE-dist-c", 3000.0, 11),
+            # D：份额占优但 payers=2 < 3 → 薄样本不出"分发不足"
+            ("KS_FAKE-dist-d", 50.0, 2),
+        ):
+            creative, _asset = _seed(
+                db,
+                creative_name=name,
+                filename=f"{name}-variant-name.mp4",
+            )
+            self._snapshot(db, creative, spend=spend, payers=payers)
+            creatives[name] = creative
+        db.flush()
+        return creatives
+
+    def test_two_hint_types_flagged(self, db_session: Session) -> None:
+        creatives = self._seed_mix(db_session)
+        items = distribution_hint_items(db_session)
+        by_name = {item.creative_name: item for item in items}
+        assert set(by_name) == {"KS_FAKE-dist-a", "KS_FAKE-dist-b"}
+        under = by_name["KS_FAKE-dist-a"]
+        assert under.kind == "distribution_hint"
+        assert under.reason_code == "distribution_under_served"
+        assert under.creative_id == creatives["KS_FAKE-dist-a"].id
+        budget = by_name["KS_FAKE-dist-b"]
+        assert budget.reason_code == "distribution_budget_review"
+        # 文案不含任何效率百分比（定性诊断，只给方向与建议）
+        for item in items:
+            assert "%" not in item.reason
+
+    def test_global_silence_below_min_total_payers(self, db_session: Session) -> None:
+        # Σpayers = 9 < 20：份额无统计意义，整体静默
+        for name, spend, payers in (
+            ("KS_FAKE-quiet-a", 100.0, 8),
+            ("KS_FAKE-quiet-b", 4000.0, 1),
+        ):
+            creative, _asset = _seed(
+                db_session, creative_name=name, filename=f"{name}-variant-name.mp4"
+            )
+            self._snapshot(db_session, creative, spend=spend, payers=payers)
+        db_session.flush()
+        assert distribution_hint_items(db_session) == []
+
+    def test_no_snapshots_no_hints(self, db_session: Session) -> None:
+        _seed(
+            db_session,
+            creative_name="KS_FAKE-no-snap",
+            filename="KS_FAKE-no-snap-variant-name.mp4",
+        )
+        db_session.flush()
+        assert distribution_hint_items(db_session) == []
+
+    def test_latest_snapshot_wins(self, db_session: Session) -> None:
+        # 同 creative 多条快照：只读最新一条（旧行不参与份额）
+        creatives = self._seed_mix(db_session)
+        stale = creatives["KS_FAKE-dist-a"]
+        db_session.add(
+            VerdictSnapshot(
+                id=str(uuid.uuid4()),
+                creative_id=stale.id,
+                computed_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                action="PAUSE",
+                reason_code="zero_payers",
+                rules_version="rules-v2",
+                content_hash=uuid.uuid4().hex,
+                metrics={"spend": 99999.0, "payers": 0},
+            )
+        )
+        db_session.flush()
+        items = distribution_hint_items(db_session)
+        assert {item.creative_name for item in items} == {
+            "KS_FAKE-dist-a",
+            "KS_FAKE-dist-b",
+        }

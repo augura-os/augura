@@ -5,7 +5,7 @@ import { useRecommendations } from "../../hooks/useRecommendations";
 import { useMetricConfig } from "../../hooks/useMetricConfig";
 import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
-import { briefLine, formatDollars, priorityText, recommendationLines } from "./briefLine";
+import { briefLabel, briefLine, formatDollars, priorityText, recommendationLines } from "./briefLine";
 
 type Group = "urgent" | "optimize" | "healthy";
 
@@ -112,6 +112,14 @@ function ItemCard({
             >
               {t(`brief.action.${item.action}`)}
             </span>
+            {(item.labels ?? []).map((code) => (
+              <span
+                key={code}
+                className="shrink-0 rounded bg-indigo-50 px-1 py-px text-[10px] font-medium text-indigo-600"
+              >
+                {briefLabel(code, t)}
+              </span>
+            ))}
             <span className="min-w-0 truncate text-[13px] font-medium text-neutral-800">
               {item.creative_name}
             </span>

@@ -44,6 +44,7 @@ fix(api): coerce string list fields from JSON Mode providers
 ## 5. Releases & rollback
 
 - Semantic tags: `vX.Y.Z`, pushed to the repo. Docker images are built from tags by the publish workflow.
+- When tagging a release, also bump `APP_VERSION` in `apps/api/app/version.py` (telemetry reports it as `app_version`).
 - Rollback options, pick per scenario: revert PR / `alembic downgrade` / restore the latest pg_dump.
 
 ## 6. CI

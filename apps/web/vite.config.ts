@@ -18,7 +18,7 @@ export default defineConfig({
     host: true,
     port: 3000,
     proxy: {
-      "^/(upload|assets|graph|analysis|settings|creatives|review|derivations|dnas)": {
+      "^/(upload|assets|graph|analysis|settings|creatives|review|derivations|dnas|jobs|admin)": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },

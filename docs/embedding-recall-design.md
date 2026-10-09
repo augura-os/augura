@@ -1,6 +1,6 @@
 # Embedding 召回层设计方案（含执行预演）
 
-> 状态：设计稿（评审修订版），未开工。本文只做设计与预演，不含任何代码改动。
+> 状态：已落地（v0.8 起）。本文是落地前的设计与预演记录，代码现状以仓库为准。
 > 代码事实均于 2026-09-16 在 main（git tag v0.7.0，commit 1d63fdb）上核实。版本口径统一用 git tag（`apps/api/app/version.py` 的 APP_VERSION 是独立双轨，不作定位依据）。
 > 2026-09-16 经独立评审（`docs/embedding-recall-design-review.md`）后修订，修订要点见 §0。
 

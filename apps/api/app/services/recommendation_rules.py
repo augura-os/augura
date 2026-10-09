@@ -23,6 +23,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from app.services.market_stats import MarketBaseline
     from app.services.recommendation import (
         CreativeMetrics,
         RecommendationAction,
@@ -67,7 +68,9 @@ class ReasonBitCode(StrEnum):
 
 
 # 规则集版本：规则变更时人工 bump（见模块 docstring）。
-RULES_VERSION = "rules-v1"
+# rules-v2：新增 Verdict 附加标签（LabelCode / classify_labels），16 条主
+# 规则语义不变。
+RULES_VERSION = "rules-v2"
 
 # 判定常量（原 recommendation 模块常量，随规则迁入本模块；recommendation
 # 再导出以保持既有 import 路径可用，调参仍是一行改动）。
@@ -406,3 +409,118 @@ RULES: tuple[Rule, ...] = (
     # 兜底：永远命中，必须保持在最后
     Rule(ReasonCode.KEEP_HEALTHY, _rule_keep_healthy),
 )
+
+
+# ---------------------------------------------------------------------------
+# Winner 七分类标签（Verdict 附加信息，不参与 16 规则级联、不改变 action）
+# ---------------------------------------------------------------------------
+
+
+class LabelCode(StrEnum):
+    """Verdict.labels 全集。
+
+    前端 i18n 键为 ``brief.label.<code>``（apps/web locales），字符串值是对外
+    契约——只允许新增成员，禁止修改已有成员的值。返回类型是 list 以保留未来
+    多标签扩展，当前实现按序 first-match、至多一个标签。
+    """
+
+    UNDEREXPLORED = "underexplored"
+    PROVEN_WINNER = "proven_winner"
+    SATURATED = "saturated"
+    AUDIENCE_NICHE_WINNER = "audience_niche_winner"
+    POTENTIAL_WINNER = "potential_winner"
+    LOW_CLICK_HIGH_VALUE = "low_click_high_value"
+    HIGH_CLICK_LOW_VALUE = "high_click_low_value"
+
+
+def classify_labels(
+    verdict_action: str,
+    reason_code: str,
+    metrics: CreativeMetrics,
+    thresholds: dict[str, float],
+    baseline: MarketBaseline | None = None,
+) -> list[str]:
+    """按判定表对 creative 打赢家标签（纯函数；至多一个标签，first-match）。
+
+    - ``underexplored`` 是短路门：小样本/未起量创意不出其他任何标签。
+    - ``saturated`` 用"消耗腰斩"（recent < 0.5 × prev 且 prev 够判定线）近似
+      频次/供给衰减——弱化理由：没有分频次曝光数据，消耗衰减是最可用的代理。
+    - ``audience_niche_winner`` 是弱化版（单市场内优于基准、外推未知），
+      M3 后再升级为跨市场全量版。
+    - 需要市场基准的标签在 baseline 缺失/不可靠时直接跳过（宁可无标签，
+      不用不可靠基准误判）。
+    """
+    m = metrics
+    red = thresholds["cpp_red_line"]
+    # 1) 短路门：小样本不出其他标签
+    if reason_code in (ReasonCode.NO_DELIVERY, ReasonCode.INSUFFICIENT_DATA) or (
+        m.impressions < thresholds["impressions_min_signal"]
+    ):
+        return [LabelCode.UNDEREXPLORED]
+    # 2) 验证赢家
+    if (
+        verdict_action == "KEEP"
+        and m.spend >= SPEND_SIGNIFICANT
+        and m.payers >= PAYERS_MIN_JUDGE
+    ):
+        return [LabelCode.PROVEN_WINNER]
+    # 3) 疑似饱和：历史上量、成本仍达标，但近窗消耗腰斩
+    if (
+        m.payers >= PAYERS_MIN_JUDGE
+        and m.cpp is not None
+        and m.cpp < red
+        and m.prev_spend >= SPEND_MIN_JUDGE
+        and m.recent_spend < 0.5 * m.prev_spend
+    ):
+        return [LabelCode.SATURATED]
+    # 4) 细分市场赢家（弱化版）：单市场内优于市场基准
+    if (
+        m.market_count == 1
+        and m.payers >= PAYERS_MIN_JUDGE
+        and baseline is not None
+        and baseline.reliable
+        and baseline.cpp_median is not None
+        and m.cpp is not None
+        and m.cpp < baseline.cpp_median
+    ):
+        return [LabelCode.AUDIENCE_NICHE_WINNER]
+    # 5) 潜力赢家：未起量但效率领先或回报达绿线
+    if m.spend < SPEND_SIGNIFICANT and (
+        (
+            m.payers >= PAYERS_MIN_JUDGE
+            and m.cpp is not None
+            and m.cpp < thresholds["cpp_efficient"]
+        )
+        or (
+            m.spend >= SPEND_MIN_JUDGE
+            and m.roas is not None
+            and m.roas >= thresholds["roas_green_line"]
+        )
+    ):
+        return [LabelCode.POTENTIAL_WINNER]
+    # 6) 低点击高价值：CTR 低于市场中位但付费效率领先
+    if (
+        baseline is not None
+        and baseline.reliable
+        and baseline.ctr_median is not None
+        and m.ctr is not None
+        and m.ctr < baseline.ctr_median
+        and m.payers >= PAYERS_MIN_JUDGE
+        and m.cpp is not None
+        and m.cpp < thresholds["cpp_efficient"]
+    ):
+        return [LabelCode.LOW_CLICK_HIGH_VALUE]
+    # 7) 高点击低价值：CTR 高于市场中位但成本过线或有消耗无付费
+    if (
+        baseline is not None
+        and baseline.reliable
+        and baseline.ctr_median is not None
+        and m.ctr is not None
+        and m.ctr > baseline.ctr_median
+        and (
+            (m.cpp is not None and m.cpp >= red)
+            or (m.payers == 0 and m.spend >= SPEND_MIN_JUDGE)
+        )
+    ):
+        return [LabelCode.HIGH_CLICK_LOW_VALUE]
+    return []

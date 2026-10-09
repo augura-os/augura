@@ -52,6 +52,10 @@ class VerdictSnapshot(Base):
     )
     # 判定输入指标全集（dataclasses.asdict(CreativeMetrics)）
     metrics: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
-    # 去重指纹：{action, reason_code, params, rules_version, thresholds, metrics}
-    # 的 canonical JSON 的 sha256；同 creative 最新行相同则不插新行
+    # 赢家标签（LabelCode 字符串数组；rules-v2 起，旧行由 server_default '[]' 补齐）
+    labels: Mapped[list[object]] = mapped_column(
+        JSONB, nullable=True, default=list, server_default="[]"
+    )
+    # 去重指纹：{action, reason_code, params, rules_version, thresholds, metrics,
+    # labels} 的 canonical JSON 的 sha256；同 creative 最新行相同则不插新行
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

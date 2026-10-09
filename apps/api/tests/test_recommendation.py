@@ -39,6 +39,10 @@ def _metrics(**overrides: object) -> object:
         row_count=10,
         days_idle=0,
         impressions=0,
+        clicks=0,
+        prev_spend=0.0,
+        market_count=0,
+        ctr=None,
         recent_spend=300.0,
         recent_cpp=50.0,
         variant_count=1,
@@ -380,6 +384,8 @@ def _seed_creative(db: Session) -> Creative:
                 date=date(2026, 7, 10),
                 spend=100.0,
                 installs=50,
+                impressions=1000,
+                clicks=20,
                 raw={"付费人数": 2, "D1_Roas": 0.02},
             ),
             Performance(
@@ -388,6 +394,8 @@ def _seed_creative(db: Session) -> Creative:
                 date=date(2026, 7, 18),
                 spend=300.0,
                 installs=100,
+                impressions=3000,
+                clicks=90,
                 raw={"付费人数": 4, "D1_Roas": 0.04},
             ),
         ]
@@ -412,6 +420,37 @@ class TestAggregate:
         assert metrics.days_idle == 1
         # spend-weighted roas: (100*0.02 + 300*0.04) / 400
         assert metrics.roas == 0.035
+        # clicks 行级求和；ctr = ratio of sums
+        assert metrics.clicks == 110
+        assert metrics.impressions == 4000
+        assert metrics.ctr == 110 / 4000
+        # prev 窗口（max_date 前 8–14 天）：07-10 行在窗内，07-18 行属 recent
+        assert metrics.prev_spend == 100.0
+        assert metrics.recent_spend == 300.0
+
+    def test_ctr_none_without_impressions(self, db_session: Session) -> None:
+        creative = Creative(id=str(uuid.uuid4()), name="KS_FAKE-no-impressions")
+        db_session.add(creative)
+        db_session.flush()
+        rows = [
+            Performance(
+                id=str(uuid.uuid4()),
+                creative_name="ks_fake-no-impressions",
+                date=date(2026, 7, 18),
+                spend=100.0,
+                installs=10,
+                impressions=0,
+                clicks=0,
+                raw={"付费人数": 2},
+            )
+        ]
+        metrics = aggregate(
+            creative, None, None, rows, max_date=date(2026, 7, 19), variant_count=1
+        )
+        # impressions=0 → ctr 为 None（不是 0：0 曝光 ≠ 0 点击率）
+        assert metrics.ctr is None
+        # 无 prev 窗口行 → 0
+        assert metrics.prev_spend == 0.0
 
     def test_build_report_covers_seeded_creative(self, db_session: Session) -> None:
         creative = _seed_creative(db_session)
@@ -425,6 +464,61 @@ class TestAggregate:
         # priority 已计算（金额 ≥ 0，把握在 0-1 之间）
         assert verdict.priority_dollars >= 0.0
         assert 0.0 <= verdict.confidence <= 1.0
+        # 投放行覆盖的 distinct 市场数（KS_EN → 归一后 1 个市场）
+        assert metrics.market_count == 1
+        # 赢家标签已挂（附加信息，不影响 action）
+        assert isinstance(verdict.labels, list)
+
+    def test_build_report_market_count_zero_without_delivery(
+        self, db_session: Session
+    ) -> None:
+        creative = Creative(id=str(uuid.uuid4()), name="KS_FAKE-no-delivery")
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()),
+            filename="KS_FAKE-no-delivery-variant-name-long-enough.mp4",
+            file_type="video",
+            storage_key=f"test/{uuid.uuid4()}",
+        )
+        db_session.add_all([creative, asset])
+        db_session.flush()
+        db_session.add(
+            CreativeVariant(
+                id=str(uuid.uuid4()),
+                creative_id=creative.id,
+                asset_id=asset.id,
+                name="v1",
+            )
+        )
+        db_session.flush()
+        report = build_report(db_session, [creative])
+        metrics, _verdict = report.items[0]
+        assert metrics.market_count == 0
+
+
+class TestWinnerLabels:
+    """recommend() 挂标签：附加信息，action 由既有规则测试锁定不受影响。"""
+
+    def test_recommend_attaches_proven_winner(self) -> None:
+        verdict = recommend(
+            _metrics(spend=2000.0, payers=10, cpp=80.0, roas=0.03, impressions=10000)
+        )
+        assert verdict.action == "KEEP"
+        assert verdict.labels == ["proven_winner"]
+
+    def test_recommend_underexplored_short_circuit(self) -> None:
+        # 小样本：即使其余指标漂亮也只出 underexplored
+        verdict = recommend(
+            _metrics(spend=3.91, payers=0, cpp=None, roas=0.0, impressions=833)
+        )
+        assert verdict.reason_code == "insufficient_data"
+        assert verdict.labels == ["underexplored"]
+
+    def test_recommend_without_baseline_or_label_match(self) -> None:
+        # 无基准、无亮点：labels 为空但判定照常
+        verdict = recommend(_metrics(cpp=150.0, roas=0.03, impressions=10000))
+        assert verdict.action == "ITERATE"
+        assert verdict.reason_code == "cpp_over_red"
+        assert verdict.labels == []
 
 
 def _seed_derivation_creative(

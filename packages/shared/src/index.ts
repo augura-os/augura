@@ -172,6 +172,8 @@ export interface RecommendationItem {
   reason_params: Record<string, number | string | null>;
   /** 补充理由（只读上下文）；空或缺模板时前端回退 reasons[1:] 中文文案 */
   reason_bits?: ReasonBit[];
+  /** 赢家七分类标签（LabelCode；前端 brief.label.<code> 渲染，缺模板回退原码） */
+  labels?: string[];
 }
 
 export interface RecommendationReport {
@@ -185,7 +187,7 @@ export interface RecommendationReport {
 // Review queue (GET /review/queue)
 // ---------------------------------------------------------------------------
 
-export type ReviewKind = "low_confidence" | "dna_unassigned" | "merge_candidate" | "observation_pair" | "pending_verdict" | "derivation_review" | "archive_suggestion" | "market_conflict" | "threshold_calibration" | "market_detect" | "family_bootstrap" | "auto_brake" | "rule_keyword";
+export type ReviewKind = "low_confidence" | "dna_unassigned" | "merge_candidate" | "observation_pair" | "pending_verdict" | "derivation_review" | "archive_suggestion" | "market_conflict" | "threshold_calibration" | "market_detect" | "family_bootstrap" | "auto_brake" | "rule_keyword" | "distribution_hint";
 
 export interface FamilyMember {
   id: string;
@@ -313,6 +315,8 @@ export interface ReviewQueue {
   auto_brakes: ReviewItem[];
   /** 规则词建议（人工改判挖出的候选词，确认才落 settings 词表） */
   rule_keywords: ReviewItem[];
+  /** 定性分发诊断（份额视角，仅建议级；数据源为最新 verdict 快照） */
+  distribution_hints: ReviewItem[];
   /** 稳态增量扩族提示（散点攒够一批时建议运行智能建族） */
   family_bootstrap_hint: FamilyBootstrapHint;
   /** 各建议类别（judge_suggestions.kind）的改判率/采纳率摘要 */

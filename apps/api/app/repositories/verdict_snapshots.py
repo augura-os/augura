@@ -53,6 +53,29 @@ class VerdictSnapshotRepository:
             for creative_id, computed_at, content_hash in self.db.execute(stmt)
         }
 
+    def latest_per_creative(self) -> list[VerdictSnapshot]:
+        """每个 creative 的最新一条快照行（distribution_hint 的数据源）。
+
+        与 latest_hashes 同一回接口径：max(computed_at) 无并列歧义（写入方
+        保证同 creative 严格递增）。
+        """
+        latest = (
+            select(
+                VerdictSnapshot.creative_id,
+                func.max(VerdictSnapshot.computed_at).label("computed_at"),
+            )
+            .group_by(VerdictSnapshot.creative_id)
+            .subquery()
+        )
+        stmt = select(VerdictSnapshot).join(
+            latest,
+            and_(
+                VerdictSnapshot.creative_id == latest.c.creative_id,
+                VerdictSnapshot.computed_at == latest.c.computed_at,
+            ),
+        )
+        return list(self.db.scalars(stmt).all())
+
     def bulk_insert(self, snapshots: Sequence[VerdictSnapshot]) -> None:
         self.db.add_all(snapshots)
         self.db.flush()

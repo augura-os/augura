@@ -55,6 +55,7 @@ def recommendation_report(db: Session) -> RecommendationReport:
                 ReasonBitModel(code=bit.code, params=bit.params)
                 for bit in verdict.supplementary
             ],
+            labels=list(verdict.labels),
             priority_dollars=verdict.priority_dollars,
             confidence=verdict.confidence,
             metrics=MetricsOut(

@@ -59,6 +59,7 @@ def review_queue(db: DbDep) -> Envelope[ReviewQueue]:
             family_bootstraps=review_service.family_bootstrap_items(db),
             auto_brakes=review_service.auto_brake_items(db),
             rule_keywords=review_service.rule_keyword_items(db),
+            distribution_hints=review_service.distribution_hint_items(db),
             family_bootstrap_hint=review_service.family_bootstrap_hint(db),
             judge_stats=judge_calibration_service.judge_stats(db),
             intervention_density=InterventionDensity(

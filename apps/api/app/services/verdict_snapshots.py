@@ -5,11 +5,12 @@ POST /creatives/recommendations/refresh 与投放数据导入）；GET 读路径
 纯读，不写快照。
 
 去重：content_hash 对 {action, reason_code, params, rules_version,
-thresholds, metrics} 做 canonical JSON（sort_keys + default=str）的
+thresholds, metrics, labels} 做 canonical JSON（sort_keys + default=str）的
 sha256；同一 creative 最新快照指纹相同则跳过——只有内容变化才产生新行，
 历史可对比且表不膨胀。reasons / supplementary / priority_dollars /
 confidence 不参与指纹：它们是同一输入的确定推导物，变化必然伴随
-action/params/metrics 之一变化。
+action/params/metrics 之一变化。labels（赢家标签）参与指纹：基准或窗口
+数据变化可能只改标签而不改 action/metrics 口径内的值。
 """
 
 from __future__ import annotations
@@ -67,6 +68,7 @@ def write_snapshots(
                 "rules_version": RULES_VERSION,
                 "thresholds": thresholds,
                 "metrics": metrics_dict,
+                "labels": list(verdict.labels),
             }
         )
         previous = latest.get(metrics.creative_id)
@@ -94,6 +96,7 @@ def write_snapshots(
                 rules_version=RULES_VERSION,
                 thresholds=thresholds,
                 metrics=metrics_dict,
+                labels=list(verdict.labels),
                 content_hash=digest,
             )
         )

@@ -14,6 +14,7 @@ from app.services.market_stats import (
     main_market_for_filenames,
     main_market_for_rows,
     market_baselines,
+    market_count_for_rows,
 )
 from app.services.settings import (
     DEFAULT_THRESHOLDS,
@@ -77,6 +78,33 @@ class TestComputeBaselines:
         assert baselines["US"].cpp_median is None
         assert baselines["US"].roas_median is None
         assert "" not in baselines
+
+    def test_ctr_median_only_counts_creatives_with_impressions(self) -> None:
+        rows = [
+            # 创意级 CTR = 创意内 sum(clicks)/sum(impressions)，再取市场中位数
+            _row("KS_EN-a.mp4", 500, 10, 0.02),
+            _row("KS_EN-b.mp4", 500, 10, 0.02),
+            _row("KS_EN-c.mp4", 500, 10, 0.02),
+        ]
+        rows[0].impressions, rows[0].clicks = 1000, 10  # CTR 1%
+        rows[1].impressions, rows[1].clicks = 1000, 30  # CTR 3%
+        # c 无曝光：不参与 CTR 中位数（0 曝光 ≠ 0 点击率）
+        baselines = compute_baselines(rows, PREFIXES)
+        assert abs(baselines["US"].ctr_median - 0.02) < 1e-9
+
+    def test_ctr_median_none_when_no_impressions(self) -> None:
+        rows = [_row("KS_EN-a.mp4", 500, 10, 0.02)]
+        baselines = compute_baselines(rows, PREFIXES)
+        assert baselines["US"].ctr_median is None
+
+    def test_market_count_for_rows(self) -> None:
+        rows = [
+            _row("KS_EN-a.mp4", 100, 5, 0.02),
+            _row("KS_PT-a.mp4", 100, 5, 0.02),
+            _row("no-prefix-here.mp4", 100, 5, 0.02),  # 无市场前缀不计入
+        ]
+        assert market_count_for_rows(rows, PREFIXES) == 2
+        assert market_count_for_rows([], PREFIXES) == 0
 
     def test_db_entry_point(self, db_session: Session) -> None:
         db_session.add_all(

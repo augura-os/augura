@@ -7,6 +7,7 @@
 
 - 分市场阈值（settings.resolve_thresholds 的市场覆盖层）
 - 裂变判定（verdict_judge 的 language-market 跨市场相对口径）
+- 赢家标签（recommendation_rules.classify_labels 的市场内相对比较）
 
 统计口径：先在创意（creative_name）内聚合（CPP = 总消耗/总付费，ROAS
 按消耗加权），再对市场内各创意取**中位数**（抗极端值，小样本市场的
@@ -43,6 +44,9 @@ class MarketBaseline:
     cpp_median: float | None  # 创意级 CPP 中位数；全市场无付费 → None
     roas_median: float | None  # 创意级 D1 ROAS 中位数；全市场无数据 → None
     creative_count: int  # 该市场有投放行的创意数
+    # 创意级 CTR（= 创意内 sum(clicks)/sum(impressions)，仅 impressions>0 的
+    # 创意参与）的市场内中位数；全市场无曝光 → None
+    ctr_median: float | None = None
 
     @property
     def reliable(self) -> bool:
@@ -55,7 +59,7 @@ def compute_baselines(
     aliases: dict[str, str] | None = None,
 ) -> dict[str, MarketBaseline]:
     """纯计算：performance 行 → 市场码 → MarketBaseline（供测试复用）。"""
-    # 市场 → 创意名 → (spend, payers, roas加权分子, roas加权分母)
+    # 市场 → 创意名 → (spend, payers, roas加权分子, roas加权分母, clicks, impressions)
     grouped: dict[str, dict[str, list[float]]] = {}
     for row in rows:
         if not row.creative_name:
@@ -65,7 +69,7 @@ def compute_baselines(
             continue  # 无市场前缀的行不参与市场基准
         metrics = metrics_from_raw(row.raw or {})
         bucket = grouped.setdefault(tag, {}).setdefault(
-            row.creative_name, [0.0, 0.0, 0.0, 0.0]
+            row.creative_name, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         )
         bucket[0] += row.spend
         bucket[1] += float(int(metrics["payers"] or 0))
@@ -73,24 +77,32 @@ def compute_baselines(
         if roas is not None and row.spend > 0:
             bucket[2] += row.spend * float(roas)
             bucket[3] += row.spend
+        bucket[4] += row.clicks or 0
+        bucket[5] += row.impressions or 0
 
     baselines: dict[str, MarketBaseline] = {}
     for tag, creatives in grouped.items():
         cpps = [
             spend / payers
-            for spend, payers, _w, _ws in creatives.values()
+            for spend, payers, _w, _ws, _c, _i in creatives.values()
             if payers > 0
         ]
         roases = [
             weighted / roas_spend
-            for _s, _p, weighted, roas_spend in creatives.values()
+            for _s, _p, weighted, roas_spend, _c, _i in creatives.values()
             if roas_spend > 0
+        ]
+        ctrs = [
+            clicks / impressions
+            for _s, _p, _w, _ws, clicks, impressions in creatives.values()
+            if impressions > 0
         ]
         baselines[tag] = MarketBaseline(
             code=tag,
             cpp_median=median(cpps) if cpps else None,
             roas_median=median(roases) if roases else None,
             creative_count=len(creatives),
+            ctr_median=median(ctrs) if ctrs else None,
         )
     return baselines
 
@@ -125,6 +137,22 @@ def main_market_for_rows(
     if not spend_by_market:
         return ""
     return max(spend_by_market.items(), key=lambda item: item[1])[0]
+
+
+def market_count_for_rows(
+    rows: Sequence[Performance],
+    prefixes: tuple[str, ...],
+    aliases: dict[str, str] | None = None,
+) -> int:
+    """一组投放行覆盖的 distinct 市场数（market_tag 归一；无投放行为 0）。"""
+    tags: set[str] = set()
+    for row in rows:
+        if not row.creative_name:
+            continue
+        tag, _rest = market_tag(row.creative_name, prefixes, aliases)
+        if tag:
+            tags.add(tag)
+    return len(tags)
 
 
 def main_market_for_filenames(

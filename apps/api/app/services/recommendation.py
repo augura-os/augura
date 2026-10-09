@@ -18,10 +18,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
-from typing import Literal, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.services.market_stats import MarketBaseline
 
 from app.models import (
     Creative,
@@ -43,7 +46,7 @@ from app.services.matching import (
     normalize,
 )
 from app.services.metrics import RECENT_WINDOW_DAYS, aggregate
-from app.services.recommendation_rules import RULES, RuleContext
+from app.services.recommendation_rules import RULES, RuleContext, classify_labels
 from app.services.settings import (
     DEFAULT_JUDGE_METRICS,
     DEFAULT_THRESHOLDS,
@@ -77,7 +80,9 @@ class Verdict:
     panel, tooltips, telemetry) keep working. ``supplementary`` carries the
     context-only reasons in ReasonBit form (its Chinese rendering is also
     appended to ``reasons``). ``priority_dollars`` / ``confidence`` are filled
-    by build_report via services/priority.
+    by build_report via services/priority. ``labels`` 是赢家七分类标签
+    （services/recommendation_rules.classify_labels）：Verdict 附加信息，
+    不参与规则级联、不改变 action。
     """
 
     action: RecommendationAction
@@ -87,6 +92,8 @@ class Verdict:
     supplementary: list[ReasonBit] = field(default_factory=list)
     priority_dollars: float = 0.0
     confidence: float = 0.0
+    # 赢家标签（LabelCode 字符串；至多一个，list 保留多标签扩展）
+    labels: list[str] = field(default_factory=list)
 
 # 默认值 = services/settings.DEFAULT_THRESHOLDS；用户在 Settings 页改阈值后，
 # 引擎读配置（resolve_metric_config），这些模块常量仅作缺省与测试锚点。
@@ -130,6 +137,12 @@ class CreativeMetrics:
     variant_count: int
     # 总曝光（数据充分性闸门用；行级 impressions 列求和）
     impressions: int = 0
+    # 总点击（行级 clicks 列求和；ctr 派生 property 的分子）
+    clicks: int = 0
+    # 紧邻 recent 窗口之前的等长窗口（max_date 前 8–14 天）消耗；衰减判定的分母
+    prev_spend: float = 0.0
+    # 投放行归一后的 distinct 市场数（build_report 注入；无投放为 0）
+    market_count: int = 0
     observation_partners: list[str] = field(default_factory=list)
     # 主市场（消耗最高变体的市场标签；无投放数据退回文件名前缀，再无则 ""）
     main_market: str = ""
@@ -143,6 +156,11 @@ class CreativeMetrics:
     # 可选判定指标（消耗加权；judge_metrics 开启后参与判定）
     d3_roas: float | None = None
     d1_retention: float | None = None
+
+    @property
+    def ctr(self) -> float | None:
+        """点击率 = clicks / impressions（ratio of sums；无曝光为 None）。"""
+        return self.clicks / self.impressions if self.impressions else None
 
 
 def collect_creative_performance(
@@ -213,6 +231,7 @@ def collect_creative_performance(
 def recommend(
     metrics: CreativeMetrics,
     config: MetricConfig | None = None,
+    baseline: MarketBaseline | None = None,
 ) -> Verdict:
     """Classify a creative; the first matching rule in the registry wins.
 
@@ -224,6 +243,9 @@ def recommend(
     Thresholds and the participating metrics come from ``config`` (Settings
     页配置）；未传时用默认值——与未配置的旧行为完全一致。``judge_metrics``
     门控：不在列表里的指标跳过对应判定分支。
+
+    ``baseline`` 是 creative 主市场的 MarketBaseline（services/market_stats）：
+    只供赢家标签（classify_labels）做市场内相对比较，不影响 action。
 
     Returns a structured ``Verdict``; ``verdict.reasons`` keeps the exact
     legacy Chinese sentences (byte-identical), while ``reason_code`` +
@@ -244,6 +266,13 @@ def recommend(
     for rule in RULES:
         verdict = rule.evaluate(ctx)
         if verdict is not None:
+            verdict.labels = classify_labels(
+                verdict.action,
+                verdict.reason_code,
+                metrics,
+                cfg.thresholds,
+                baseline,
+            )
             return verdict
     raise AssertionError(  # pragma: no cover — keep_healthy 兜底永远命中
         "RULES 缺少兜底规则（keep_healthy 必须永远命中）"
@@ -361,6 +390,8 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
     # 替代"每个 variant × 全部行"的逐行匹配（profile 热点 72%）
     all_performances = list(db.scalars(select(Performance)).all())
     performance_index = index_performances(all_performances)
+    # 市场基准算一次、全循环复用：赢家标签（classify_labels）的市场内相对比较
+    baselines = market_stats.market_baselines(db, all_performances=all_performances)
     threshold_cache: dict[str, dict[str, float]] = {}
 
     def _thresholds(market: str) -> dict[str, float]:
@@ -418,13 +449,16 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             exhausted_factors=exhausted_factors,
             main_market=main_market,
         )
+        metrics.market_count = market_stats.market_count_for_rows(rows, prefixes)
         # 分市场阈值：市场覆盖 → 用户全局覆盖/品类档 → 全局默认（按市场 memo）
         red_line = _thresholds(metrics.main_market)["cpp_red_line"]
         market_config = replace(
             metric_config,
             thresholds=_thresholds(metrics.main_market),
         )
-        verdict = recommend(metrics, market_config)
+        verdict = recommend(
+            metrics, market_config, baseline=baselines.get(metrics.main_market)
+        )
         staged.append((metrics, verdict, red_line))
 
     # 第二遍：货币化 priority。加注空间 proxy = min(起量线, 同家族头部消耗) − 自身消耗

@@ -5,6 +5,7 @@ import { zh } from "../../locales/zh";
 import { setLang } from "../../lib/i18n";
 import {
   briefBitLine,
+  briefLabel,
   briefLine,
   formatDollars,
   priorityText,
@@ -199,5 +200,39 @@ describe("priorityText", () => {
 
   it("returns null for near-zero dollars", () => {
     expect(priorityText(makeItem({ priority_dollars: 0 }), tZh)).toBeNull();
+  });
+});
+
+describe("briefLabel", () => {
+  it("renders winner labels in zh and en", () => {
+    expect(briefLabel("proven_winner", tZh)).toBe("验证赢家");
+    expect(briefLabel("proven_winner", tEn)).toBe("Proven winner");
+    expect(briefLabel("low_click_high_value", tZh)).toBe("低点击高价值");
+    expect(briefLabel("low_click_high_value", tEn)).toBe("Low click, high value");
+  });
+
+  it("renders every known label code from a template in both locales", () => {
+    const codes = [
+      "underexplored",
+      "proven_winner",
+      "saturated",
+      "audience_niche_winner",
+      "potential_winner",
+      "low_click_high_value",
+      "high_click_low_value",
+    ];
+    for (const code of codes) {
+      expect(briefLabel(code, tZh)).not.toBe(code);
+      expect(briefLabel(code, tEn)).not.toBe(code);
+    }
+  });
+
+  it("falls back to the raw code when the template is missing", () => {
+    expect(briefLabel("future_label", tZh)).toBe("future_label");
+    expect(briefLabel("future_label", tEn)).toBe("future_label");
+  });
+
+  it("returns empty string for an empty code", () => {
+    expect(briefLabel("", tZh)).toBe("");
   });
 });

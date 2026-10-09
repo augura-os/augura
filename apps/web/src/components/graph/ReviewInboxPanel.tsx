@@ -44,6 +44,7 @@ const KIND_DOT: Record<ReviewKind, string> = {
   market_conflict: "bg-teal-500",
   threshold_calibration: "bg-cyan-500",
   market_detect: "bg-lime-500",
+  distribution_hint: "bg-indigo-500",
 };
 
 const KIND_ORDER: ReviewKind[] = [
@@ -59,6 +60,7 @@ const KIND_ORDER: ReviewKind[] = [
   "market_conflict",
   "threshold_calibration",
   "market_detect",
+  "distribution_hint",
   "low_confidence",
 ];
 
@@ -1012,6 +1014,7 @@ export function ReviewInboxPanel({
     map.set("threshold_calibration", data?.threshold_calibrations ?? []);
     map.set("market_detect", data?.market_detects ?? []);
     map.set("low_confidence", data?.low_confidence ?? []);
+    map.set("distribution_hint", data?.distribution_hints ?? []);
     return map;
   }, [data]);
 

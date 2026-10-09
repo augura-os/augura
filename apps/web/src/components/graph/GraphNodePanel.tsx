@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
-import type { GraphNodeDTO, GraphResponse } from "@shared";
+import type { GraphNodeDTO, GraphResponse, PerformanceRecord } from "@shared";
 import { childrenOf, parentOf } from "../../lib/graph-layout";
 import { useAssetDetail } from "../../hooks/useAssetDetail";
 import { useCreativePerformance } from "../../hooks/useCreativePerformance";
@@ -17,10 +17,10 @@ import { Skeleton } from "../ui/skeleton";
 import { PerformanceSummary, PerformanceTable } from "../assets/PerformanceTable";
 import { EvolutionSection } from "./EvolutionSection";
 import { shortAssetLabel } from "../../lib/short-name";
-import { useMetricConfig } from "../../hooks/useMetricConfig";
+import { useMetricConfig, metricLabel } from "../../hooks/useMetricConfig";
 import { apiErrorText } from "../../lib/apiErrorText";
 import { useT } from "../../lib/i18n";
-import { briefLabel, recommendationLines } from "./briefLine";
+import { briefLabel, briefObjective, recommendationLines } from "./briefLine";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -146,6 +146,60 @@ function AssetPanel({ assetId }: { assetId: string }) {
 
 // --- Creative panel: aggregate from graph data + split -----------------------
 
+/**
+ * 按优化方式分组的 spend/payers/CPP 简表（只展示，不判定——判定走主类型，
+ * 见后端 build_report 分桶）。单一口径（含全部未标注）时不显示。
+ */
+function ObjectiveGroupTable({ rows }: { rows: PerformanceRecord[] }) {
+  const t = useT();
+  const groups = new Map<string, PerformanceRecord[]>();
+  for (const row of rows) {
+    const key = row.optimization_type ?? "";
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  if (groups.size < 2) return null;
+  const entries = [...groups.entries()]
+    .map(([objective, groupRows]) => {
+      const spend = groupRows.reduce((sum, row) => sum + (row.spend ?? 0), 0);
+      const payers = groupRows.reduce((sum, row) => sum + (row.payers ?? 0), 0);
+      return { objective, spend, payers };
+    })
+    .sort((a, b) => b.spend - a.spend);
+  const money = (value: number) =>
+    `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return (
+    <div className="rounded-md border border-[#f0f0f0] bg-neutral-50 px-3 py-2">
+      <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">
+        {t("brief.objective.groupTitle")}
+      </p>
+      <table className="w-full text-xs text-neutral-800">
+        <thead>
+          <tr className="border-b border-[#e5e5e5] text-left text-neutral-500">
+            <th className="py-0.5 pr-2 font-medium">{t("brief.objective.groupColumn")}</th>
+            <th className="py-0.5 pr-2 font-medium">{metricLabel("spend")}</th>
+            <th className="py-0.5 pr-2 font-medium">{metricLabel("payers")}</th>
+            <th className="py-0.5 font-medium">{metricLabel("cpp")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => (
+            <tr key={entry.objective || "unknown"} className="border-b border-[#f5f5f5] last:border-0">
+              <td className="py-0.5 pr-2">
+                {briefObjective(entry.objective, t) || t("brief.objective.unknown")}
+              </td>
+              <td className="py-0.5 pr-2 tabular-nums">{money(entry.spend)}</td>
+              <td className="py-0.5 pr-2 tabular-nums">{entry.payers}</td>
+              <td className="py-0.5 tabular-nums">
+                {entry.payers > 0 ? money(entry.spend / entry.payers) : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function CreativePerformanceSection({ creativeId }: { creativeId: string }) {
   const t = useT();
   const { data, isLoading } = useCreativePerformance(creativeId);
@@ -157,7 +211,12 @@ function CreativePerformanceSection({ creativeId }: { creativeId: string }) {
     return <p className="text-sm text-neutral-400">{t("graph.node.noPerformance")}</p>;
   }
   // Summary only — daily rows live on the asset detail page.
-  return <PerformanceSummary rows={rows} />;
+  return (
+    <div className="space-y-2">
+      <PerformanceSummary rows={rows} />
+      <ObjectiveGroupTable rows={rows} />
+    </div>
+  );
 }
 
 /** DNA 归族/改归（Creative 面板）——写 edit_logs，correction 自动回流训练。 */

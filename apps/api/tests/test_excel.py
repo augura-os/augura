@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.services.excel import metrics_from_raw, parse_excel
+from app.services.excel import metrics_from_raw, normalize_objective, parse_excel
 
 
 def _write_xlsx(path: Path, rows: list[dict[str, object]]) -> None:
@@ -127,3 +127,72 @@ def test_resolve_raw_columns_equivalent_across_key_order() -> None:
     forward = _resolve_raw_columns(tuple(sorted(keys)))
     reverse = _resolve_raw_columns(tuple(sorted(keys, reverse=True)))
     assert forward == reverse
+
+
+class TestOptimizationColumn:
+    """优化方式列：中/英/无列三态 + 归一映射（迁移 0020 回填同口径）。"""
+
+    def test_chinese_column_parsed_and_normalized(self, tmp_path: Path) -> None:
+        path = tmp_path / "report.xlsx"
+        _write_xlsx(path, [
+            {"素材名称": "素材D", "消耗": 10.0, "优化方式": "安装"},
+            {"素材名称": "素材E", "消耗": 10.0, "优化方式": "AEO"},
+            {"素材名称": "素材F", "消耗": 10.0, "优化方式": "VO"},
+        ])
+        rows = parse_excel(str(path))
+        assert [row.optimization_type for row in rows] == ["install", "aeo", "vo"]
+
+    def test_english_column_alias(self, tmp_path: Path) -> None:
+        # 每个别名列单独成文件（_find_column 是 first-match，不合并多别名列）
+        path = tmp_path / "report-opt.xlsx"
+        _write_xlsx(path, [{"name": "creative-g", "spend": 10.0, "optimization": "MAI"}])
+        (row,) = parse_excel(str(path))
+        assert row.optimization_type == "install"
+        path2 = tmp_path / "report-obj.xlsx"
+        _write_xlsx(path2, [{"name": "creative-h", "spend": 10.0, "objective": "value optimization"}])
+        (row2,) = parse_excel(str(path2))
+        assert row2.optimization_type == "vo"
+
+    def test_missing_column_defaults_to_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "report.xlsx"
+        _write_xlsx(path, [{"素材名称": "素材I", "消耗": 10.0}])
+        (row,) = parse_excel(str(path))
+        assert row.optimization_type is None
+
+    def test_unrecognized_value_normalizes_to_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "report.xlsx"
+        _write_xlsx(path, [{"素材名称": "素材J", "消耗": 10.0, "优化方式": "别的"}])
+        (row,) = parse_excel(str(path))
+        assert row.optimization_type is None
+
+    def test_normalize_objective_mapping(self) -> None:
+        for raw_value in ("安装", "install", "Installs", "MAI", " mai "):
+            assert normalize_objective(raw_value) == "install"
+        assert normalize_objective("AEO") == "aeo"
+        assert normalize_objective("value optimization") == "vo"
+        assert normalize_objective("VO") == "vo"
+        assert normalize_objective("") is None
+        assert normalize_objective(None) is None
+        assert normalize_objective("未知") is None
+
+
+def test_parsed_row_persisted_with_optimization_type(tmp_path: Path, db_session) -> None:
+    """上传落库链路：ParsedPerformanceRow.optimization_type → Performance 列。"""
+    import uuid
+
+    from app.models import CreativeAsset
+    from app.repositories.performance import PerformanceRepository
+
+    asset = CreativeAsset(
+        id=str(uuid.uuid4()),
+        filename="KS_FAKE-excel-objective.xlsx",
+        file_type="excel",
+        storage_key=f"test/{uuid.uuid4()}",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    path = tmp_path / "report.xlsx"
+    _write_xlsx(path, [{"素材名称": "素材K", "消耗": 10.0, "优化方式": "AEO"}])
+    rows = parse_excel(str(path))
+    created = PerformanceRepository(db_session).bulk_create(asset.id, rows)
+    assert created[0].optimization_type == "aeo"

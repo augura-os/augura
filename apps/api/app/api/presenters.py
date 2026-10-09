@@ -89,6 +89,7 @@ def performance_to_out(row: Performance) -> PerformanceOut:
         d1_retention=cast(float | None, metrics["d1_retention"]),
         cpi=cast(float | None, metrics["cpi"]),
         ipm=cast(float | None, metrics["ipm"]),
+        optimization_type=row.optimization_type,
     )
 
 

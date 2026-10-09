@@ -73,6 +73,9 @@ export function briefLine(
     .replace("{payers}", int(p.payers))
     .replace("{cpp}", num(p.cpp))
     .replace("{red}", int(p.red))
+    .replace("{cpi}", num(p.cpi))
+    .replace("{cpi_median}", num(p.cpi_median))
+    .replace("{installs}", int(p.installs))
     .replace("{roas_pct}", pct(p.roas))
     .replace("{green_pct}", pct(p.roas_green, 0))
     .replace("{d3_pct}", pct(p.d3_roas))
@@ -98,7 +101,8 @@ export function briefBitLine(bit: ReasonBit, t: (key: string) => string): string
     .replace("{judged_count}", int(p.judged_count))
     .replace("{positive_count}", int(p.positive_count))
     .replace("{pending}", int(p.pending))
-    .replace("{partner}", typeof p.partner === "string" ? p.partner : "-");
+    .replace("{partner}", typeof p.partner === "string" ? p.partner : "-")
+    .replace("{mixed_spend}", num(p.mixed_spend, 0));
 }
 
 /**
@@ -140,4 +144,15 @@ export function briefLabel(code: string, t: (key: string) => string): string {
   const key = `brief.label.${code}`;
   const label = t(key);
   return label === key ? code : label;
+}
+
+/**
+ * 优化方式徽章文案：brief.objective.<code> 模板；未知/缺模板（含 ""）返回
+ * 空串——调用方据此不渲染徽章（"unknown 不显示"）。
+ */
+export function briefObjective(value: string | null | undefined, t: (key: string) => string): string {
+  if (!value) return "";
+  const key = `brief.objective.${value}`;
+  const label = t(key);
+  return label === key ? "" : label;
 }

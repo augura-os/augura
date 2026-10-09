@@ -34,9 +34,11 @@ EXPECTED_ORDER = (
     ReasonCode.INSUFFICIENT_PAYERS,
     ReasonCode.CPP_OVER_PAUSE_LINE,
     ReasonCode.CPP_OVER_RED_WEAK_ROAS,
+    ReasonCode.CPI_FAR_OVER_MARKET,
     ReasonCode.IDLE_WAS_HEALTHY,
     ReasonCode.EFFICIENT_NOT_SCALED,
     ReasonCode.CPP_OVER_RED,
+    ReasonCode.CPI_OVER_MARKET,
     ReasonCode.D1_ROAS_BELOW_GREEN,
     ReasonCode.D3_ROAS_WEAK,
     ReasonCode.D1_RETENTION_WEAK,
@@ -80,8 +82,9 @@ class TestRuleRegistry:
 
     def test_rules_version_pinned(self) -> None:
         # 规则变更必须人工 bump（快照落库回溯用）；改动这里是刻意动作
-        # rules-v2：新增 Verdict 附加标签（LabelCode），主规则语义不变
-        assert RULES_VERSION == "rules-v2"
+        # rules-v3：优化方式分口径（OBJECTIVE_PROFILES）+ install 的 CPI 相对
+        # 判定两条新规则 + zero_payers profile 门控；NULL 类型 = rules-v2 行为
+        assert RULES_VERSION == "rules-v3"
 
 
 class TestReasonBitCodeCoverage:
@@ -97,6 +100,7 @@ class TestReasonBitCodeCoverage:
             judged_count=0,
             positive_count=0,
             observation_partners=[],
+            mixed_spend=0.0,
         )
         base.update(overrides)
         return SimpleNamespace(**base)
@@ -111,6 +115,7 @@ class TestReasonBitCodeCoverage:
                 judged_count=3,
                 positive_count=2,
                 observation_partners=["partner-a"],
+                mixed_spend=88.0,
             )
         )
         assert bits
@@ -127,6 +132,7 @@ class TestReasonBitCodeCoverage:
                 judged_count=3,
                 positive_count=2,
                 observation_partners=["partner-a"],
+                mixed_spend=88.0,
             )
         )
         trend_down = supplementary_reasons(self._metrics(cpp=100.0, recent_cpp=60.0))

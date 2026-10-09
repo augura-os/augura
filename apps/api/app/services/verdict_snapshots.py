@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.models import VerdictSnapshot
 from app.repositories.verdict_snapshots import VerdictSnapshotRepository
-from app.services.recommendation_rules import RULES_VERSION
+from app.services.recommendation_rules import RULES_VERSION, profile_thresholds
 from app.services.settings import resolve_thresholds
 
 if TYPE_CHECKING:
@@ -42,9 +42,9 @@ def write_snapshots(
 ) -> int:
     """为一次 refresh 的 (metrics, verdict) 列表写决策快照；返回实际插入条数。
 
-    阈值解析与 build_report 内部同函数同口径（按 main_market 分市场解析，
-    带 memo）；不 commit，由调用方统一提交（与 refresh_creative_states 的
-    事务边界一致）。
+    阈值解析与 build_report 内部同函数同口径（按 main_market 分市场解析 +
+    优化方式 profile 乘数叠加，带 memo）；不 commit，由调用方统一提交（与
+    refresh_creative_states 的事务边界一致）。
     """
     if not items:
         return 0
@@ -58,7 +58,11 @@ def write_snapshots(
         market = metrics.main_market or None
         if market not in threshold_cache:
             threshold_cache[market] = resolve_thresholds(db, market)
-        thresholds = threshold_cache[market]
+        # 与 build_report 同口径叠加优化方式 profile（vo 红线 ×2 等）——profile
+        # 差异经 thresholds 进 content_hash；缓存 dict 只读，有乘数时返回副本
+        thresholds = profile_thresholds(
+            threshold_cache[market], metrics.optimization_type or None
+        )
         metrics_dict = dataclasses.asdict(metrics)
         digest = _content_hash(
             {

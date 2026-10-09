@@ -84,6 +84,8 @@ def recommendation_report(db: Session) -> RecommendationReport:
                 "confidence": scores[metrics.creative_id][0].confidence,
             },
             lifecycle_state=states.get(metrics.creative_id, "active"),
+            optimization_type=metrics.optimization_type,
+            mixed_spend=metrics.mixed_spend,
         )
         for metrics, verdict in report.items
     ]

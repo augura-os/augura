@@ -52,6 +52,10 @@ class Performance(TimestampMixin, Base):
     installs: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     # Original Excel row (column names are not fixed — §6 loose parsing).
     raw: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    # 优化方式（install/aeo/vo；NULL = 未知，判定回落 aeo 口径）——上传时从
+    # 「优化方式」列归一（services/excel.normalize_objective），存量行由迁移
+    # 0020 从 raw JSONB 回填。
+    optimization_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class AnalysisResult(TimestampMixin, Base):

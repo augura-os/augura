@@ -527,6 +527,8 @@ export const zh: Record<string, string> = {
   "settings.metrics.tracked": "关注指标（显示）",
   "settings.metrics.judging": "判定指标（参与今日建议判定）",
   "settings.metrics.thresholds": "判定阈值",
+  "settings.metrics.objectiveHint":
+    "阈值按优化方式生效：AEO 原样；VO 的 CPP 红线/暂停线自动 ×2（当前实际 ${vo_red} / ${vo_pause}）；Install 不看 CPP，按 CPI 相对市场基准判定。",
   "settings.metrics.overrides": "分市场阈值覆盖（可选，按市场码）",
   "settings.metrics.marketHint":
     "市场 = 语言区（PT/ES/US…），文件名混合前缀自动归一到码。不同市场 CPP/ROAS 量级不同（如美国 CPM 是巴西的数倍）。未配置的市场显示「跟随全局」，点击展开编辑。跨市场裂变判定会自动改用目标市场内相对口径。",

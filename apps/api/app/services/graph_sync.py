@@ -12,7 +12,9 @@ import logging
 import time
 from typing import Sequence
 
-from graph import GraphRepository
+from graph import GraphRepository, NodeType
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import Creative, CreativeAsset, CreativeDNA, CreativeVariant, Tag
@@ -128,3 +130,43 @@ def delete_creative_node(settings: Settings, creative_id: str) -> None:
         get_graph_repository(settings).delete_creative(creative_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Neo4j 删除 creative 节点失败: %s", exc)
+
+
+def reconcile_graph(db: Session, settings: Settings) -> None:
+    """Startup self-heal: reconcile Neo4j with PostgreSQL state.
+
+    Neo4j drifts silently — every sync helper here swallows errors by design
+    (Neo4j down must not break the flow), and several PG delete paths never
+    propagate to Neo4j at all (family retire/merge, data resets, re-uploads).
+    Since ``GET /graph`` reads Neo4j first, ghosts render as duplicate
+    nodes. The reconciler prunes nodes whose ref_id is gone from PG,
+    rebuilds HAS_CREATIVE edges from PG dna assignments (fixing ghost edges
+    and missing edges in one pass), and drops orphan tags.
+    """
+    try:
+        repo = get_graph_repository(settings)
+        valid_ids: list[tuple[NodeType, list[str]]] = [
+            ("dna", list(db.scalars(select(CreativeDNA.id)))),
+            ("creative", list(db.scalars(select(Creative.id)))),
+            ("variant", list(db.scalars(select(CreativeVariant.id)))),
+            ("asset", list(db.scalars(select(CreativeAsset.id)))),
+            ("tag", list(db.scalars(select(Tag.id)))),
+        ]
+        for node_type, ref_ids in valid_ids:
+            deleted = repo.prune_ghost_nodes(node_type, ref_ids)
+            if deleted:
+                logger.info("Neo4j 对账：清理幽灵 %s 节点 %d 个", node_type, deleted)
+        assignments = db.execute(
+            select(Creative.dna_id, Creative.id).where(Creative.dna_id.is_not(None))
+        ).all()
+        edge_count = repo.replace_has_creative_edges(
+            [(dna_id, creative_id) for dna_id, creative_id in assignments]
+        )
+        repo.prune_orphan_tags()
+        logger.info(
+            "Neo4j 对账完成：HAS_CREATIVE 边 %d 条（PG 归属 %d 个 creative）",
+            edge_count,
+            len(assignments),
+        )
+    except Exception as exc:  # noqa: BLE001 — Neo4j down must not block startup
+        logger.warning("Neo4j 对账失败，继续（SQL 镜像仍有效）: %s", exc)

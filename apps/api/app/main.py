@@ -47,7 +47,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 启动时后台 flush 遥测队列（endpoint 未配置时为 no-op）——
     # 否则用户永远不会手动跑 scripts/flush_telemetry（beta 实测发现）
     threading.Thread(target=_flush_telemetry_bg, daemon=True).start()
+    # 启动时后台对账 Neo4j：幽灵节点/幽灵边会在 /graph（Neo4j 优先读）
+    # 直接渲染成重复节点；sync 写入静默失败的设定决定了漂移必然累积，
+    # 每次启动按 PG 状态自愈一次（Neo4j 未就绪时内部静默跳过）。
+    threading.Thread(target=_reconcile_graph_bg, daemon=True).start()
     yield
+
+
+def _reconcile_graph_bg() -> None:
+    try:
+        from app.database import SessionLocal
+        from app.services import graph_sync
+
+        with SessionLocal() as db:
+            graph_sync.reconcile_graph(db, get_settings())
+    except Exception as exc:  # noqa: BLE001 — 失败静默，不影响主流程
+        logger.debug("graph reconcile on startup skipped: %s", exc)
 
 
 def _flush_telemetry_bg() -> None:

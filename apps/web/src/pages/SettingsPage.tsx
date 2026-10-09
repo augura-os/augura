@@ -687,6 +687,11 @@ export default function SettingsPage() {
                   </div>
                 ))}
               </div>
+              <p className="text-xs text-neutral-400">
+                {t("settings.metrics.objectiveHint")
+                  .replace("{vo_red}", String((thresholds.cpp_red_line ?? 0) * 2))
+                  .replace("{vo_pause}", String((thresholds.cpp_pause_line ?? 0) * 2))}
+              </p>
             </div>
 
             <div className="space-y-1.5">

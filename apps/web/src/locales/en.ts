@@ -544,6 +544,8 @@ export const en: Record<string, string> = {
   "settings.metrics.tracked": "Tracked metrics (displayed)",
   "settings.metrics.judging": "Judging metrics (used for the Daily Brief)",
   "settings.metrics.thresholds": "Judging thresholds",
+  "settings.metrics.objectiveHint":
+    "Thresholds apply per optimization objective: AEO uses them as-is; VO auto-doubles the CPP red/pause lines (currently ${vo_red} / ${vo_pause}); Install ignores CPP and is judged by CPI vs the market baseline.",
   "settings.metrics.overrides": "Per-market threshold overrides (optional, by market code)",
   "settings.metrics.marketHint":
     "A market is a language region (PT / ES / US …); mixed filename prefixes are normalized to a code. CPP and ROAS differ in magnitude by market (US CPM runs several times Brazil's). Markets without an override show \"Follow global\" — click to expand and edit. Cross-market derivation verdicts automatically switch to a baseline relative to the target market.",

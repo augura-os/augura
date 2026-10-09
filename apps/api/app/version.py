@@ -3,4 +3,4 @@
 Bumped at release time alongside the git tag.
 """
 
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.11.0"

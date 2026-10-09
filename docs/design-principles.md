@@ -2,8 +2,7 @@
 
 **版本**：v1.0（2026-07-22）
 **来源**：产品与 GPT 的创意智能系统系列讨论（产品宪法对话），经与现有实现比对蒸馏
-**定位**：产品宪法。功能会迭代，本文件的原则不变。与 `AGENTS.md`（工程上下文）、
-`docs/creative-boundary-rules.md`（Creative 判定操作手册）配合使用。
+**定位**：产品宪法。功能会迭代，本文件的原则不变。与工程上下文约定、Creative 边界判定操作手册（均维护在私有仓，未随本仓公开）配合使用。
 
 ---
 
@@ -19,13 +18,13 @@ Augura 不是素材管理工具，是 **Creative Intelligence System**。它回�
 | # | 原则 | 含义 | 现状落点 |
 |---|---|---|---|
 | P01 | **Creative First** | 素材(Video/Asset)只是 Creative 的一次实验，不是知识的最小单位 | ✅ 已实现（Creative→Variant→Asset 四层） |
-| P02 | **Knowledge First** | 一切功能最终沉淀知识，不是数据 | 🟡 部分（edit_logs、DNA 文档；Insight/Knowledge 未建） |
+| P02 | **Knowledge First** | 一切功能最终沉淀知识，不是数据 | 🟡 部分（edit_logs、DNA 已建表；Insight/Knowledge 未建） |
 | P03 | **AI Native** | AI 是产品的运行核心，用户不应感知"哪里用了 AI" | ✅ 方向一致（上传即自动分析，人工只做确认） |
 | P04 | **Human in the Loop** | AI 永远只有建议权，一切人工修正留痕并反馈 AI | ✅ edit_logs + confidence 复核徽章 |
-| P05 | **Explainable AI** | AI 必须解释"为什么"，不允许"AI 觉得" | 🟡 部分（analysis 有 hook/conflict 解释；Recommendation 未建） |
+| P05 | **Explainable AI** | AI 必须解释"为什么"，不允许"AI 觉得" | ✅ 已实现（analysis 有 hook/conflict 解释；推荐引擎已建成——18 条规则注册表，每条建议带 reason_code 可追溯） |
 | P06 | **Immutable Data** | 原始数据不可改，一切修改有审计 | ✅ performances.raw 原样保存 + edit_logs |
 | P07 | **Graph Driven** | 数据组织方式是图，不是文件夹/树 | ✅ Neo4j + React Flow 首页 |
-| P08 | **Evolution over Management** | 产品推动创意演化，不是管理素材 | 🔲 待建（裂变关系 DERIVED_FROM 未建） |
+| P08 | **Evolution over Management** | 产品推动创意演化，不是管理素材 | ✅ 已实现（裂变关系 DERIVED_FROM 已建，迁移 0007） |
 
 ## 3. 领域模型：对话愿景 ↔ 现状映射
 
@@ -38,15 +37,15 @@ Audience ← Hypothesis → Pattern → Creative → Variant → Video → Exper
 现状实现（小样本 MVP 阶段）：
 
 ```
-(DNA 文档级) → Creative → Variant → Asset(Video) → Performance(事实表)
-     ↑              ↑            ↑           ↑              ↑
-  ≈Pattern 层    ✅ 已建      ✅ 已建      ✅ 已建      ✅ 已建（raw+匹配）
+DNA(已建表) → Creative → Variant → Asset(Video) → Performance(事实表)
+     ↑            ↑          ↑           ↑                ↑
+ ✅ 迁移 0006  ✅ 已建    ✅ 已建     ✅ 已建         ✅ 已建（raw+匹配）
 ```
 
 | 对话概念 | 现状 | 差距与 V1 决策 |
 |---|---|---|
 | **Hypothesis**（创意假设） | 无 | 暂缓。素材量不足以验证假设，先靠人工创意方向（见 §5） |
-| **Pattern**（创意模式） | DNA 登记表（文档级） | **最接近**。DNA = 钩子原型×机制×叙事，本质就是 Pattern。V1 决策：素材/DNA 增长到触发条件后建表（见 AGENTS.md §8） |
+| **Pattern**（创意模式） | ✅ DNA 已建表（迁移 0006：`creative_dnas` 表 + `creatives.dna_id` + Neo4j `CreativeDNA` 节点） | **最接近**。DNA = 钩子原型×机制×叙事，本质就是 Pattern。已从文档级登记升级为系统层 |
 | **Audience**（受众） | 仅 market 标签 | 暂缓。当前只投少数市场，Audience 维度启用时机=多市场扩量 |
 | **Experiment**（受控实验） | 无（只有素材级投放数据） | 暂缓→轻量。V1 不做对照实验结构，用 Creative 内 Variant 间数据对比近似（前贴效果对比已在用） |
 | **Insight**（数据洞察） | 无（沉淀在 docs 案例裁决录） | 轻量落地候选：docs 已有人工 Insight（如"V2 竖版 Roas 更优"），可先保持文档级 |
@@ -86,9 +85,9 @@ Audience ← Hypothesis → Pattern → Creative → Variant → Video → Exper
 
 ## 6. 开发任务排序（C4 裁决后）
 
-1. **DNA（Pattern 层）建表迁移**（已定为首任务）：文档级家族登记升级为系统层——
-   Postgres `creative_dnas` 表 + `creatives.dna_id` + Neo4j `(:CreativeDNA)-[:HAS_CREATIVE]`，
-   SQL 草案见 `creative-dna-registry.md` §4。
+1. ~~**DNA（Pattern 层）建表迁移**~~（✅ 已完成：迁移 0006 落地 Postgres `creative_dnas`
+   表 + `creatives.dna_id` + Neo4j `(:CreativeDNA)-[:HAS_CREATIVE]`）——文档级家族
+   登记升级为系统层，原 SQL 草案维护在私有仓的 DNA 登记表文档中。
 2. ~~**Creative 级 Recommendation 引擎（规则版）**~~（✅ 2026-07-22 完成：R1–R9 规则引擎 +
    `GET /creatives/recommendations` + Graph 首页"今日建议"面板）——基于 performance + DNA + 观察对，
    对每个 Creative 输出 KEEP / ITERATE / PAUSE / ARCHIVE 建议及理由（P05 可解释）。

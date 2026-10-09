@@ -1,5 +1,7 @@
 # Augura MVP — 共享契约（AGENT SPEC）
 
+> **历史存档**：本文是 MVP 时代的契约文档，功能现状以代码与 README 为准。
+
 本文件是前后端实现的**唯一权威契约**。任何一方不得擅自更改；如有冲突，保持现状并在报告中指出。
 
 ## 0. 项目目标（唯一目标）
@@ -132,7 +134,7 @@ Project、Creative、CreativeVariant、CreativeAsset、Performance、Tag、TagAs
 ## 10. 验证命令
 
 - 后端：`python -m compileall apps/api/app packages/graph/src`（本机无依赖，仅语法检查；依赖在 Docker 内安装）。
-- 前端：`cd apps/web && npm install && npm run build`（本机 npm 需 `npm.cmd`，或 PATH 加 `/c/Users/Administrator/AppData/Local/Programs/kimi-desktop/resources/resources/runtime/node`）。
+- 前端：`cd apps/web && npm install && npm run build`（本机 npm 需 `npm.cmd`，或将 Node.js 安装目录加入 PATH）。
 - 整体：`docker compose up --build`（本机无 Docker，由用户执行）。
 
 ## 11. 非目标（禁止开发）
@@ -145,5 +147,5 @@ Dashboard、用户系统/登录、机器学习训练、标签体系管理页、�
 
 - Settings 页配置 `api_key` + `base_url` + `vision_model` + `embedding_model`，优先级：DB → 环境变量。
 - Kimi 直连：`base_url=https://api.moonshot.cn/v1`，`vision_model=kimi-k2.5`（支持 base64 图片输入）。Kimi 不支持 strict json_schema → 自动降级 JSON Mode（输出仍经 Pydantic 严格校验）。
-- **Kimi/DeepSeek 均无 embeddings 接口** → `embedding_model` 置空时，聚类自动使用本地 token-Jaccard 文本相似度（含中文单字+二元组），阈值 0.34。精度低于 embedding，但链路完整可用，人工 merge/split 可修正。
+- **Kimi embeddings 接口**（2026-09-16 实测修正，详见 `docs/embedding-recall-e0-report.md`）：Kimi coding 端点（`api.kimi.com/coding/v1`）**已有** `/embeddings`，实际模型 `bge_m3_embed`、1024 维；DeepSeek 无。`embedding_model` 置空时，聚类自动使用本地 token-Jaccard 文本相似度（含中文单字+二元组），阈值 0.34。精度低于 embedding，但链路完整可用，人工 merge/split 可修正。
 - `creatives.representative_text`（迁移 0002）存储文本签名用于兜底匹配。

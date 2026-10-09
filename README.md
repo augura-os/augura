@@ -23,7 +23,7 @@ It decomposes every creative into structure, links them into a graph, and turns 
 
 Every UA team shares the same quiet pain: only the creative planner who designed a hit knows why it hit — and when they leave, the experience leaves with them. Creatives sit in cloud drives, data sits in spreadsheets, and judgment calls like "is this the same concept as last month's?" get re-made from scratch, every single week.
 
-Augura systematizes this. Upload a creative and AI decomposes it into hook, conflict, gameplay and reward. Decomposed creatives cluster into a five-layer graph: DNA → Creative → Variant → Asset. From then on, every human ruling — merge or split, did this iteration work — is remembered. The next time the same situation shows up, the system brings a suggestion; you just confirm.
+Augura systematizes this. Upload a creative and AI decomposes it into hook, conflict, gameplay and reward. Decomposed creatives cluster into a five-layer graph: DNA → Creative → Variant → Asset → Tag. From then on, every human ruling — merge or split, did this iteration work — is remembered. The next time the same situation shows up, the system brings a suggestion; you just confirm.
 
 Think of it as local-first creative intelligence infrastructure: your data stays on your machine by default (frame samples go to the model provider you configure during AI analysis), judgment stays with you, and the repetitive work goes to the system.
 
@@ -32,7 +32,7 @@ Think of it as local-first creative intelligence infrastructure: your data stays
 </p>
 
 <p align="center">
-  <sub>The main interface: the creative graph on the left (DNA → Creative → Variant → Asset), and the review inbox on the right waiting for one-word rulings.</sub>
+  <sub>The main interface: the creative graph on the left (DNA → Creative → Variant → Asset → Tag), and the review inbox on the right waiting for one-word rulings.</sub>
 </p>
 
 ## Features
@@ -42,7 +42,15 @@ Think of it as local-first creative intelligence infrastructure: your data stays
 - **Merge guard** — pairs you once ruled "not the same creative" are remembered forever. Anyone trying to merge them must write down why. You make each judgment once — never twice.
 - **Evolution tracking** — every variant records what it derived from and which factor changed (language / aspect ratio / intro sticker). When performance data flows back, you verdict the iteration; when a direction is exhausted, the system says so.
 - **Review inbox** — merge candidates, unassigned creatives, observation-pair closures, each pre-adjudicated by LLM self-consistency votes with reasons attached. And there's a brake on AI mistakes: if the override rate crosses the line, auto-judging degrades to suggestion-only.
+- **Explainable verdicts** — the Daily Brief's calls come from a registry of 18 named rules (rules-v3), each returning one of KEEP / ITERATE / PAUSE / ARCHIVE. Every suggestion carries a `reason_code` traceable to the exact named rule, a priority in dollars, and a confidence score.
+- **Objective-aware verdicts (new in v0.11)** — Facebook optimization types get their own KPI profiles: install-optimized creatives are judged on CPI against the market baseline, vo red lines tolerate double the CPP, aeo stays the default. The optimization-goal column in your Excel export is auto-detected and backfilled into historical rows.
+- **Winner labels** — seven labels classify where each creative stands: `proven_winner` / `potential_winner` / `saturated` / `audience_niche_winner` / `low_click_high_value` / `high_click_low_value` / `underexplored`.
+- **Auditable verdict snapshots** — every verdict run is snapshotted with a content hash: re-runs on unchanged data reproduce identical results, and the history stays auditable.
 - **Configurable metrics** — CPP red line, ROAS green line, whether D3 ROAS or D1 retention participate in verdicts: tune it all in Settings, no code changes.
+- **Reliable analysis queue** — analyses run as durable jobs on a standalone worker process: failed jobs can be retried from the UI, and a restart re-enqueues orphaned jobs automatically.
+- **Self-healing graph** — on startup the API reconciles Neo4j against PostgreSQL, clearing ghost nodes and rebuilding missing edges.
+- **Local embedding recall** — a built-in bge-small model powers semantic recall with no API key configured at all; if it's unavailable, recall degrades to text similarity and analysis never blocks.
+- **Bilingual UI** — the whole interface ships in English and Chinese, end to end.
 - **Data sovereignty** — creatives, performance rows and analyses live on your own machine / server / NAS (local data volumes). The Creative Genome Program is whitelist-only (creative names hashed), one-click opt-out, fully auditable.
 
 ## Quick Start
@@ -85,8 +93,10 @@ Open **Settings** and paste a key from any OpenAI-compatible provider. The prese
 | Key source | Base URL | Vision model | Embedding |
 | --- | --- | --- | --- |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` | `text-embedding-3-small` |
-| Kimi Open Platform (platform.moonshot.cn) | `https://api.moonshot.cn/v1` | `kimi-k2.5` | — (local text similarity fallback) |
-| Kimi Coding Plan (kimi.com, `sk-kimi-…` keys) | `https://api.kimi.com/coding/v1` | `kimi-for-coding` | — (same) |
+| Kimi Open Platform (platform.moonshot.cn) | `https://api.moonshot.cn/v1` | `kimi-k2.5` | `BAAI/bge-small-zh-v1.5` (built-in local) |
+| Kimi Coding Plan (kimi.com, `sk-kimi-…` keys) | `https://api.kimi.com/coding/v1` | `kimi-for-coding` | `BAAI/bge-small-zh-v1.5` (built-in local) |
+
+The built-in local embedding model downloads once on first use (~95 MB) and works offline afterwards; only if it is unavailable does recall fall back to local text similarity.
 
 The two kinds of Kimi keys are **not interchangeable** — a `sk-kimi-` coding-plan key returns 401 on `api.moonshot.cn`, and vice versa. A Base URL missing its `/v1` path fails analysis with a 404; Settings warns before saving such a URL. Self-hosted / local endpoints (Ollama-compatible, etc.) work too — just fill in your own Base URL, and your frames never leave the machine. Nothing is called until you upload something.
 

@@ -283,6 +283,73 @@ class GraphRepository:
             )
 
     # ------------------------------------------------------------------
+    # Reconciliation (startup self-heal against PostgreSQL state)
+    # ------------------------------------------------------------------
+    _PRUNE_BATCH = 500
+
+    def prune_ghost_nodes(
+        self, node_type: NodeType, valid_ref_ids: Sequence[str]
+    ) -> int:
+        """Delete nodes whose ref_id no longer exists in PostgreSQL.
+
+        Ghosts accumulate whenever PG rows disappear through paths that do
+        not propagate to Neo4j (data resets, re-uploads, family retire /
+        merge); since ``GET /graph`` reads Neo4j first, ghosts render as
+        duplicate nodes. ``valid_ref_ids`` must be the COMPLETE set of live
+        ref_ids for the type. Deletion is batched; returns the total count.
+        """
+        neo4j_label = _NODE_LABELS[node_type]  # static label, safe to inline
+        valid = sorted(set(valid_ref_ids))
+        deleted = 0
+        with self._driver.session() as session:
+            while True:
+                record = session.run(
+                    f"MATCH (n:`{neo4j_label}`) "
+                    "WHERE NOT n.ref_id IN $valid "
+                    "WITH n LIMIT $batch "
+                    "DETACH DELETE n "
+                    "RETURN count(n) AS c",
+                    valid=valid,
+                    batch=self._PRUNE_BATCH,
+                ).single()
+                batch_deleted = int(record["c"]) if record is not None else 0
+                deleted += batch_deleted
+                if batch_deleted < self._PRUNE_BATCH:
+                    return deleted
+
+    def replace_has_creative_edges(
+        self, assignments: Sequence[tuple[str, str]]
+    ) -> int:
+        """Rebuild HAS_CREATIVE edges to exactly match PG dna assignments.
+
+        Fixes drift in both directions at once: ghost edges (creative moved
+        families, or the family was deleted) and missing edges (assignments
+        synced while Neo4j was unreachable). SIMILAR_TO / DERIVED_FROM and
+        all other edge types are untouched. ``assignments`` items are
+        ``(dna_ref_id, creative_ref_id)`` pairs; edges are only created when
+        both endpoints exist (run ``prune_ghost_nodes`` first).
+        """
+        rows = [
+            {"dna": dna_ref, "creative": creative_ref}
+            for dna_ref, creative_ref in assignments
+        ]
+        with self._driver.session() as session:
+            session.run(
+                "MATCH (:CreativeDNA)-[r:HAS_CREATIVE]->(:Creative) DELETE r"
+            )
+            if not rows:
+                return 0
+            record = session.run(
+                "UNWIND $rows AS row "
+                "MATCH (d:CreativeDNA {ref_id: row.dna}), "
+                "(c:Creative {ref_id: row.creative}) "
+                "MERGE (d)-[:HAS_CREATIVE]->(c) "
+                "RETURN count(*) AS c",
+                rows=rows,
+            ).single()
+            return int(record["c"]) if record is not None else 0
+
+    # ------------------------------------------------------------------
     # Deletes / structural operations
     # ------------------------------------------------------------------
     def delete_asset_subtree(self, asset_ref_id: str) -> list[str]:

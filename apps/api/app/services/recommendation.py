@@ -46,7 +46,13 @@ from app.services.matching import (
     normalize,
 )
 from app.services.metrics import RECENT_WINDOW_DAYS, aggregate
-from app.services.recommendation_rules import RULES, RuleContext, classify_labels
+from app.services.recommendation_rules import (
+    RULES,
+    RuleContext,
+    classify_labels,
+    profile_judge_metrics,
+    profile_thresholds,
+)
 from app.services.settings import (
     DEFAULT_JUDGE_METRICS,
     DEFAULT_THRESHOLDS,
@@ -156,6 +162,11 @@ class CreativeMetrics:
     # 可选判定指标（消耗加权；judge_metrics 开启后参与判定）
     d3_roas: float | None = None
     d1_retention: float | None = None
+    # 主优化方式（build_report 按行分桶后注入：消耗最大桶的 optimization_type；
+    # 无类型/无投放为 ""，判定回落 aeo 口径）
+    optimization_type: str = ""
+    # 非主桶消耗合计（混用素材中未参与本次判定的部分；0 = 单一口径）
+    mixed_spend: float = 0.0
 
     @property
     def ctr(self) -> float | None:
@@ -245,7 +256,9 @@ def recommend(
     门控：不在列表里的指标跳过对应判定分支。
 
     ``baseline`` 是 creative 主市场的 MarketBaseline（services/market_stats）：
-    只供赢家标签（classify_labels）做市场内相对比较，不影响 action。
+    赢家标签（classify_labels）与 install 素材的 CPI 相对规则共用，统一经
+    RuleContext 传递。优化方式（metrics.optimization_type）驱动
+    OBJECTIVE_PROFILES 的口径差异；未知/无类型回落 aeo = 旧行为。
 
     Returns a structured ``Verdict``; ``verdict.reasons`` keeps the exact
     legacy Chinese sentences (byte-identical), while ``reason_code`` +
@@ -262,6 +275,9 @@ def recommend(
         spend_s=f"${metrics.spend:,.0f}",
         cpp_s=f"${metrics.cpp:,.2f}" if metrics.cpp is not None else "-",
         red=cfg.thresholds["cpp_red_line"],
+        baseline=baseline,
+        # 测试替身/旧构造路径可能无该字段；缺省 = 未知 = aeo 口径
+        objective=getattr(metrics, "optimization_type", "") or None,
     )
     for rule in RULES:
         verdict = rule.evaluate(ctx)
@@ -271,7 +287,7 @@ def recommend(
                 verdict.reason_code,
                 metrics,
                 cfg.thresholds,
-                baseline,
+                ctx.baseline,
             )
             return verdict
     raise AssertionError(  # pragma: no cover — keep_healthy 兜底永远命中
@@ -318,6 +334,12 @@ def supplementary_reasons(metrics: CreativeMetrics) -> list[ReasonBit]:
         bits.append(ReasonBit(code="derivation_pending", params={"pending": pending}))
     for partner in m.observation_partners:
         bits.append(ReasonBit(code="observation_partner", params={"partner": partner}))
+    # 混用素材提示：非主桶消耗未参与判定（build_report 注入；旧数据无该字段）
+    mixed_spend = float(getattr(m, "mixed_spend", 0.0) or 0.0)
+    if mixed_spend > 0:
+        bits.append(
+            ReasonBit(code="mixed_objectives", params={"mixed_spend": mixed_spend})
+        )
     return bits
 
 
@@ -338,6 +360,11 @@ def render_reason_zh(bit: ReasonBit) -> str:
         return f"{p['pending']} 次裂变待判定"
     if bit.code == "observation_partner":
         return f"与 {p['partner']} 互为观察对，建议对比数据后结案"
+    if bit.code == "mixed_objectives":
+        return (
+            f"另有 ${float(p['mixed_spend']):,.0f} 消耗来自其他优化方式，"
+            "未参与本次判定"
+        )
     return bit.code
 
 
@@ -429,8 +456,27 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
                 if stats[0] >= 2 and stats[1] == 0
             )
         )
+        # 优化方式分桶：主桶 = 消耗最大的 optimization_type（None 一桶，并列时
+        # 取行序在前者，确定性）；判定只喂主桶行，非主桶消耗计入 mixed_spend。
+        # 行无类型（旧数据/无该列）→ 单桶全量 → 行为与分桶前逐字节一致
+        buckets: dict[str | None, list[Performance]] = {}
+        for row in rows:
+            buckets.setdefault(row.optimization_type, []).append(row)
+        spend_by_bucket = {
+            key: sum(row.spend for row in bucket_rows)
+            for key, bucket_rows in buckets.items()
+        }
+        main_objective = (
+            max(spend_by_bucket.items(), key=lambda item: item[1])[0]
+            if buckets
+            else None
+        )
+        main_rows = buckets.get(main_objective, [])
+        mixed_spend = sum(
+            spend for key, spend in spend_by_bucket.items() if key != main_objective
+        )
         # 主市场 = 消耗最高变体的市场；无投放数据退回变体文件名前缀
-        main_market = market_stats.main_market_for_rows(rows, prefixes)
+        main_market = market_stats.main_market_for_rows(main_rows, prefixes)
         if not main_market:
             main_market = market_stats.main_market_for_filenames(
                 [variant.name for variant in variants], prefixes
@@ -439,7 +485,7 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             creative,
             dna.code if dna else None,
             dna.name if dna else None,
-            rows,
+            main_rows,
             max_date=max_date,
             variant_count=len(variants),
             observation_partners=partners.get(creative.id, ()),
@@ -449,15 +495,25 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
             exhausted_factors=exhausted_factors,
             main_market=main_market,
         )
-        metrics.market_count = market_stats.market_count_for_rows(rows, prefixes)
-        # 分市场阈值：市场覆盖 → 用户全局覆盖/品类档 → 全局默认（按市场 memo）
-        red_line = _thresholds(metrics.main_market)["cpp_red_line"]
-        market_config = replace(
+        metrics.market_count = market_stats.market_count_for_rows(main_rows, prefixes)
+        metrics.optimization_type = main_objective or ""
+        metrics.mixed_spend = mixed_spend
+        # 阈值解析顺序：市场覆盖 → 用户全局/品类档 → 全局默认（按市场 memo），
+        # 再按优化方式 profile 叠加（install 剔除 CPP 类指标、vo 红线 ×2）；
+        # profile_thresholds 对缓存 dict 只读，有乘数时返回副本
+        thresholds = profile_thresholds(
+            _thresholds(metrics.main_market), metrics.optimization_type or None
+        )
+        red_line = thresholds["cpp_red_line"]
+        objective_config = replace(
             metric_config,
-            thresholds=_thresholds(metrics.main_market),
+            judge_metrics=profile_judge_metrics(
+                metric_config.judge_metrics, metrics.optimization_type or None
+            ),
+            thresholds=thresholds,
         )
         verdict = recommend(
-            metrics, market_config, baseline=baselines.get(metrics.main_market)
+            metrics, objective_config, baseline=baselines.get(metrics.main_market)
         )
         staged.append((metrics, verdict, red_line))
 

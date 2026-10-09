@@ -17,10 +17,15 @@ recommendation / priority / review / creative_score 等消费方共用本模块�
 | market_count | 派生注入（build_report）：投放行的 distinct 市场数；无投放为 0 |
 | spend_share / payer_share | 单 creative ÷ 全库合计（distribution_hint 按最新快照 metrics 算） |
 | main_market | 派生注入（build_report），非本模块计算 |
+| optimization_type | 派生注入（build_report）：消耗最大分桶的键；无类型为 ""，判定回落 aeo |
+| mixed_spend | 派生注入（build_report）：非主桶消耗合计；>0 追加 mixed_objectives 提示 |
 
 注：消耗加权平均 = spend-weighted row mean，非 ratio of sums——有意为之，
 抗极端小行；缺该指标的行不进分子分母。main_market 由 build_report 注入：
-消耗最高变体的市场，回退文件名前缀。
+消耗最高变体的市场，回退文件名前缀。optimization_type 分桶口径：投放行
+按 optimization_type（install/aeo/vo/NULL 一桶）分组，aggregate() 只喂
+消耗最大的主桶行，非主桶消耗合计计入 mixed_spend 并出 mixed_objectives
+提示；行全无类型时主桶 = 全量，行为与分桶引入前一致。
 """
 
 from __future__ import annotations

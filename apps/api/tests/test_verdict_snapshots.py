@@ -87,7 +87,9 @@ class TestVerdictSnapshots:
         assert isinstance(snap.priority_dollars, float)
         assert isinstance(snap.confidence, float)
         # 判定输入：规则版本 / 阈值 / 指标同口径落库
-        assert snap.rules_version == RULES_VERSION == "rules-v2"
+        # rules-v3：优化方式分口径（OBJECTIVE_PROFILES + install CPI 相对判定）；
+        # 无类型行回落 aeo，阈值不变
+        assert snap.rules_version == RULES_VERSION == "rules-v3"
         assert snap.thresholds["cpp_red_line"] == 120.0
         assert snap.metrics["spend"] == 1000.0
         assert snap.metrics["payers"] == 5

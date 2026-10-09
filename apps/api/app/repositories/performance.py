@@ -32,6 +32,7 @@ class PerformanceRepository:
                 spend=row.spend,
                 installs=row.installs,
                 raw=row.raw,
+                optimization_type=row.optimization_type,
             )
             self.db.add(performance)
             created.append(performance)

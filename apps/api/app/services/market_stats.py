@@ -47,6 +47,9 @@ class MarketBaseline:
     # 创意级 CTR（= 创意内 sum(clicks)/sum(impressions)，仅 impressions>0 的
     # 创意参与）的市场内中位数；全市场无曝光 → None
     ctr_median: float | None = None
+    # 创意级 CPI（= 创意内 sum(spend)/sum(installs)，仅 installs>0 的创意
+    # 参与）的市场内中位数；全市场无安装 → None（install 素材的 CPI 相对判定）
+    cpi_median: float | None = None
 
     @property
     def reliable(self) -> bool:
@@ -59,7 +62,7 @@ def compute_baselines(
     aliases: dict[str, str] | None = None,
 ) -> dict[str, MarketBaseline]:
     """纯计算：performance 行 → 市场码 → MarketBaseline（供测试复用）。"""
-    # 市场 → 创意名 → (spend, payers, roas加权分子, roas加权分母, clicks, impressions)
+    # 市场 → 创意名 → (spend, payers, roas加权分子, roas加权分母, clicks, impressions, installs)
     grouped: dict[str, dict[str, list[float]]] = {}
     for row in rows:
         if not row.creative_name:
@@ -69,7 +72,7 @@ def compute_baselines(
             continue  # 无市场前缀的行不参与市场基准
         metrics = metrics_from_raw(row.raw or {})
         bucket = grouped.setdefault(tag, {}).setdefault(
-            row.creative_name, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            row.creative_name, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         )
         bucket[0] += row.spend
         bucket[1] += float(int(metrics["payers"] or 0))
@@ -79,23 +82,29 @@ def compute_baselines(
             bucket[3] += row.spend
         bucket[4] += row.clicks or 0
         bucket[5] += row.impressions or 0
+        bucket[6] += float(row.installs or 0)
 
     baselines: dict[str, MarketBaseline] = {}
     for tag, creatives in grouped.items():
         cpps = [
             spend / payers
-            for spend, payers, _w, _ws, _c, _i in creatives.values()
+            for spend, payers, _w, _ws, _c, _i, _n in creatives.values()
             if payers > 0
         ]
         roases = [
             weighted / roas_spend
-            for _s, _p, weighted, roas_spend, _c, _i in creatives.values()
+            for _s, _p, weighted, roas_spend, _c, _i, _n in creatives.values()
             if roas_spend > 0
         ]
         ctrs = [
             clicks / impressions
-            for _s, _p, _w, _ws, clicks, impressions in creatives.values()
+            for _s, _p, _w, _ws, clicks, impressions, _n in creatives.values()
             if impressions > 0
+        ]
+        cpis = [
+            spend / installs
+            for spend, _p, _w, _ws, _c, _i, installs in creatives.values()
+            if installs > 0
         ]
         baselines[tag] = MarketBaseline(
             code=tag,
@@ -103,6 +112,7 @@ def compute_baselines(
             roas_median=median(roases) if roases else None,
             creative_count=len(creatives),
             ctr_median=median(ctrs) if ctrs else None,
+            cpi_median=median(cpis) if cpis else None,
         )
     return baselines
 

@@ -66,6 +66,8 @@ class PerformanceOut(BaseModel):
     d1_retention: float | None = None
     cpi: float | None = None
     ipm: float | None = None
+    # 优化方式（install/aeo/vo；None = 旧数据/该列缺失），素材详情按它分组展示
+    optimization_type: str | None = None
 
 
 class AssetDetail(BaseModel):

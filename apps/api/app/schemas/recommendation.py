@@ -63,6 +63,9 @@ class RecommendationItem(BaseModel):
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     # 生命周期（services/lifecycle）：active / watch / archived
     lifecycle_state: str = "active"
+    # 主优化方式（install/aeo/vo；"" = 未知，判定回落 aeo 口径）与非主桶消耗
+    optimization_type: str = ""
+    mixed_spend: float = 0.0
 
 
 class RecommendationReport(BaseModel):

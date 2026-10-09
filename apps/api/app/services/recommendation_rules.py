@@ -13,12 +13,18 @@ recommend() 的判定规则从顺序 if 级联迁为显式 Rule 列表，语义�
 RULES_VERSION 供后续 verdict 快照落库时随快照存储，用于回溯"这条判定
 出自哪版规则"：任何规则增删、顺序调整、文案 / 参数变更都必须人工 bump
 （rules-v1 → rules-v2 …）。
+
+优化方式分口径（rules-v3）：OBJECTIVE_PROFILES 按素材主优化方式
+（install/aeo/vo，Performance.optimization_type）描述判定口径差异——
+install 关 CPP/ROAS/留存类判定与 zero_payers（买量素材少量付费是常态），
+改用 CPI 相对市场基准判定（cpi_over_market / cpi_far_over_market）；vo 的
+CPP 红线/暂停线 ×2（高 CPP 但 ROAS 好不再误伤）；未知（NULL）= aeo = 现状。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -53,6 +59,8 @@ class ReasonCode(StrEnum):
     D1_ROAS_BELOW_GREEN = "d1_roas_below_green"
     D3_ROAS_WEAK = "d3_roas_weak"
     D1_RETENTION_WEAK = "d1_retention_weak"
+    CPI_FAR_OVER_MARKET = "cpi_far_over_market"
+    CPI_OVER_MARKET = "cpi_over_market"
     KEEP_HEALTHY = "keep_healthy"
 
 
@@ -65,12 +73,14 @@ class ReasonBitCode(StrEnum):
     DERIVATION_HEALTHY = "derivation_healthy"
     DERIVATION_PENDING = "derivation_pending"
     OBSERVATION_PARTNER = "observation_partner"
+    MIXED_OBJECTIVES = "mixed_objectives"
 
 
 # 规则集版本：规则变更时人工 bump（见模块 docstring）。
-# rules-v2：新增 Verdict 附加标签（LabelCode / classify_labels），16 条主
-# 规则语义不变。
-RULES_VERSION = "rules-v2"
+# rules-v3：优化方式分口径（OBJECTIVE_PROFILES）+ install 专用 CPI 相对判定
+# 两条新规则 + zero_payers 的 profile 门控；行无类型（NULL）时与 rules-v2
+# 逐字节一致。
+RULES_VERSION = "rules-v3"
 
 # 判定常量（原 recommendation 模块常量，随规则迁入本模块；recommendation
 # 再导出以保持既有 import 路径可用，调参仍是一行改动）。
@@ -78,6 +88,73 @@ SPEND_MIN_JUDGE = 50.0  # 低于此消耗不做暂停/ROAS/留存判定
 PAYERS_MIN_JUDGE = 3  # 付费样本 <3 时 CPP 波动是倍数级，不做 CPP 类方向性判定
 SPEND_SIGNIFICANT = 1000.0  # 起量线
 IDLE_DAYS_ARCHIVE = 14
+# install 素材的 CPI 相对市场基准判定：≥2× 中位数 → PAUSE，≥1.5× → ITERATE；
+# 安装样本 <30 时 CPI 波动是倍数级，不做方向性判定（同 PAYERS_MIN_JUDGE 逻辑）
+CPI_FAR_OVER_MARKET_MULT = 2.0
+CPI_OVER_MARKET_MULT = 1.5
+CPI_MIN_INSTALLS = 30
+
+
+@dataclass(frozen=True)
+class ObjectiveProfile:
+    """单一优化方式的判定口径差异（相对 aeo 现状的增量描述）。
+
+    行业默认常量、单点可调：judge_metrics_drop 从配置的可判定指标里剔除
+    （CPP 类规则随之全关），threshold_multipliers 在分市场阈值解析之后叠加
+    （vo 的 CPP 红线/暂停线 ×2），zero_payers_enabled 门控 zero_payers 规则
+    （install 关闭——安装优化买来少量付费是常态）。
+    """
+
+    judge_metrics_drop: frozenset[str] = frozenset()
+    threshold_multipliers: dict[str, float] = field(default_factory=dict)
+    zero_payers_enabled: bool = True
+
+
+OBJECTIVE_PROFILES: dict[str, ObjectiveProfile] = {
+    "aeo": ObjectiveProfile(),  # 现状口径（judge_metrics 全开，阈值不动）
+    "vo": ObjectiveProfile(
+        threshold_multipliers={"cpp_red_line": 2.0, "cpp_pause_line": 2.0},
+    ),
+    "install": ObjectiveProfile(
+        judge_metrics_drop=frozenset({"cpp", "d1_roas", "d3_roas", "d1_retention"}),
+        zero_payers_enabled=False,
+    ),
+}
+# 未知/NULL 优化方式回落 aeo = 现状（向后兼容锚点）
+DEFAULT_OBJECTIVE = "aeo"
+
+
+def objective_profile(objective: str | None) -> ObjectiveProfile:
+    """优化方式 → 判定 profile；未知/None 一律回落 aeo（= 现状口径）。"""
+    return OBJECTIVE_PROFILES.get(objective or DEFAULT_OBJECTIVE) or OBJECTIVE_PROFILES[
+        DEFAULT_OBJECTIVE
+    ]
+
+
+def profile_judge_metrics(
+    judge_metrics: list[str], objective: str | None
+) -> list[str]:
+    """按优化方式 profile 剔除不参与判定的指标（保序）。"""
+    drop = objective_profile(objective).judge_metrics_drop
+    return [metric for metric in judge_metrics if metric not in drop]
+
+
+def profile_thresholds(
+    thresholds: dict[str, float], objective: str | None
+) -> dict[str, float]:
+    """按优化方式 profile 叠加阈值乘数（在分市场阈值解析之后调用）。
+
+    无乘数时原样返回入参（不复制）；有乘数时返回新 dict，绝不改动入参
+    （build_report 的市场阈值缓存被多 creative 共享）。
+    """
+    multipliers = objective_profile(objective).threshold_multipliers
+    if not multipliers:
+        return thresholds
+    merged = dict(thresholds)
+    for key, multiplier in multipliers.items():
+        if key in merged:
+            merged[key] = merged[key] * multiplier
+    return merged
 
 
 @dataclass
@@ -96,6 +173,11 @@ class RuleContext:
     spend_s: str  # f"${spend:,.0f}"
     cpp_s: str  # f"${cpp:,.2f}"；无付费为 "-"
     red: float  # thresholds["cpp_red_line"]
+    # creative 主市场的市场基准：赢家标签 + install CPI 相对判定共用
+    baseline: MarketBaseline | None = None
+    # 主优化方式（install/aeo/vo；None = 未知 → aeo 口径）：zero_payers 门控
+    # 与 CPI 相对规则的开关
+    objective: str | None = None
 
 
 @dataclass
@@ -203,6 +285,9 @@ def _rule_factor_exhausted(ctx: RuleContext) -> Verdict | None:
 
 
 def _rule_zero_payers(ctx: RuleContext) -> Verdict | None:
+    # profile 门控：install 素材关闭（安装优化买来少量付费是常态）
+    if not objective_profile(ctx.objective).zero_payers_enabled:
+        return None
     m = ctx.metrics
     if m.payers == 0 and m.spend >= SPEND_MIN_JUDGE:
         return _verdict(
@@ -320,6 +405,53 @@ def _rule_cpp_over_red(ctx: RuleContext) -> Verdict | None:
     return None
 
 
+def _rule_cpi_far_over_market(ctx: RuleContext) -> Verdict | None:
+    # install 专用（CPP 类规则全关后的替代判定）：CPI ≥ 2× 市场基准 → PAUSE。
+    # 基准缺失/不可靠时直接跳过——宁可无结论，不用不可靠基准误判
+    m = ctx.metrics
+    baseline = ctx.baseline
+    if (
+        ctx.objective == "install"
+        and baseline is not None
+        and baseline.reliable
+        and baseline.cpi_median is not None
+        and m.cpi is not None
+        and m.installs >= CPI_MIN_INSTALLS
+        and m.cpi >= CPI_FAR_OVER_MARKET_MULT * baseline.cpi_median
+    ):
+        return _verdict(
+            "PAUSE",
+            ReasonCode.CPI_FAR_OVER_MARKET,
+            {"cpi": m.cpi, "cpi_median": baseline.cpi_median, "installs": m.installs},
+            f"CPI ${m.cpi:,.2f} 已达市场基准 ${baseline.cpi_median:,.2f} 的 "
+            f"{CPI_FAR_OVER_MARKET_MULT:.0f} 倍，建议暂停",
+        )
+    return None
+
+
+def _rule_cpi_over_market(ctx: RuleContext) -> Verdict | None:
+    # install 专用：CPI ≥ 1.5× 市场基准 → ITERATE
+    m = ctx.metrics
+    baseline = ctx.baseline
+    if (
+        ctx.objective == "install"
+        and baseline is not None
+        and baseline.reliable
+        and baseline.cpi_median is not None
+        and m.cpi is not None
+        and m.installs >= CPI_MIN_INSTALLS
+        and m.cpi >= CPI_OVER_MARKET_MULT * baseline.cpi_median
+    ):
+        return _verdict(
+            "ITERATE",
+            ReasonCode.CPI_OVER_MARKET,
+            {"cpi": m.cpi, "cpi_median": baseline.cpi_median, "installs": m.installs},
+            f"CPI ${m.cpi:,.2f} 超市场基准 ${baseline.cpi_median:,.2f} 的 "
+            f"{CPI_OVER_MARKET_MULT} 倍，建议迭代降本",
+        )
+    return None
+
+
 def _rule_d1_roas_below_green(ctx: RuleContext) -> Verdict | None:
     m = ctx.metrics
     t = ctx.thresholds
@@ -400,9 +532,13 @@ RULES: tuple[Rule, ...] = (
     Rule(ReasonCode.INSUFFICIENT_PAYERS, _rule_insufficient_payers),
     Rule(ReasonCode.CPP_OVER_PAUSE_LINE, _rule_cpp_over_pause_line),
     Rule(ReasonCode.CPP_OVER_RED_WEAK_ROAS, _rule_cpp_over_red_weak_roas),
+    # install 专用 CPI 相对判定：占据原 CPP 规则的档位（CPP 类规则对 install
+    # 已被 profile 关闭）；仅 objective=="install" 且基准可靠时命中
+    Rule(ReasonCode.CPI_FAR_OVER_MARKET, _rule_cpi_far_over_market),
     Rule(ReasonCode.IDLE_WAS_HEALTHY, _rule_idle_was_healthy),
     Rule(ReasonCode.EFFICIENT_NOT_SCALED, _rule_efficient_not_scaled),
     Rule(ReasonCode.CPP_OVER_RED, _rule_cpp_over_red),
+    Rule(ReasonCode.CPI_OVER_MARKET, _rule_cpi_over_market),
     Rule(ReasonCode.D1_ROAS_BELOW_GREEN, _rule_d1_roas_below_green),
     Rule(ReasonCode.D3_ROAS_WEAK, _rule_d3_roas_weak),
     Rule(ReasonCode.D1_RETENTION_WEAK, _rule_d1_retention_weak),

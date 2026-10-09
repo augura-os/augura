@@ -7,6 +7,7 @@ import {
   briefBitLine,
   briefLabel,
   briefLine,
+  briefObjective,
   formatDollars,
   priorityText,
   recommendationLines,
@@ -144,6 +145,27 @@ describe("briefLine", () => {
       "4 iterations, all ineffective (Aspect ratio, Remake) — direction exhausted",
     );
   });
+
+  it("renders cpi_far_over_market in both locales", () => {
+    const item = makeItem({
+      action: "PAUSE",
+      reason_code: "cpi_far_over_market",
+      reason_params: { cpi: 6.0, cpi_median: 3.0, installs: 100 },
+    });
+    expect(briefLine(item, tZh)).toBe("CPI $6.00 已达市场基准 $3.00 的 2 倍，建议暂停");
+    expect(briefLine(item, tEn)).toBe("CPI $6.00 hit 2× the market median $3.00 — pause");
+  });
+
+  it("renders cpi_over_market in both locales", () => {
+    const item = makeItem({
+      reason_code: "cpi_over_market",
+      reason_params: { cpi: 4.5, cpi_median: 3.0, installs: 40 },
+    });
+    expect(briefLine(item, tZh)).toBe("CPI $4.50 超市场基准 $3.00 的 1.5 倍，建议迭代降本");
+    expect(briefLine(item, tEn)).toBe(
+      "CPI $4.50 is 1.5× the market median $3.00 — iterate to cut cost",
+    );
+  });
 });
 
 describe("briefBitLine", () => {
@@ -157,6 +179,15 @@ describe("briefBitLine", () => {
 
   it("returns null when the code has no template", () => {
     expect(briefBitLine({ code: "future_code", params: {} }, tZh)).toBeNull();
+  });
+
+  it("renders mixed_objectives in both locales", () => {
+    expect(briefBitLine({ code: "mixed_objectives", params: { mixed_spend: 88 } }, tZh)).toBe(
+      "另有 $88 消耗来自其他优化方式，未参与本次判定",
+    );
+    expect(briefBitLine({ code: "mixed_objectives", params: { mixed_spend: 88 } }, tEn)).toBe(
+      "Another $88 spent under other optimization types — excluded from this verdict",
+    );
   });
 });
 
@@ -234,5 +265,21 @@ describe("briefLabel", () => {
 
   it("returns empty string for an empty code", () => {
     expect(briefLabel("", tZh)).toBe("");
+  });
+});
+
+describe("briefObjective", () => {
+  it("renders known objectives in zh and en", () => {
+    expect(briefObjective("install", tZh)).toBe("安装优化");
+    expect(briefObjective("install", tEn)).toBe("Install");
+    expect(briefObjective("aeo", tEn)).toBe("AEO");
+    expect(briefObjective("vo", tZh)).toBe("VO");
+  });
+
+  it("returns empty string for unknown or missing objectives (badge hidden)", () => {
+    expect(briefObjective("", tZh)).toBe("");
+    expect(briefObjective(null, tZh)).toBe("");
+    expect(briefObjective(undefined, tEn)).toBe("");
+    expect(briefObjective("some-future-objective", tEn)).toBe("");
   });
 });

@@ -39,6 +39,8 @@ class ParsedPerformanceRow:
     raw: dict[str, object]
     d3_roas: float | None = None
     d1_retention: float | None = None
+    # 优化方式归一值（install/aeo/vo；无该列或值不可识别为 None）
+    optimization_type: str | None = None
 
 
 # Headers carrying ratios or unit costs must never be matched as count
@@ -62,6 +64,26 @@ _D3_ROAS_KEYS = ("d3_roas", "d3roas", "d3 roas", "三日roas")
 _D1_RETENTION_KEYS = ("次留", "次日留存", "d1_retention", "d1 retention")
 _CPI_KEYS = ("cpi", "安装成本", "单次安装")
 _IPM_KEYS = ("ipm",)
+# 优化方式列（install/aeo/vo 判定口径的维度来源）
+_OPTIMIZATION_KEYS = ("优化方式", "optimization", "objective")
+
+# 优化方式归一映射（迁移 0020 的回填 SQL 是本表的冻结副本，两处同口径）
+_OBJECTIVE_ALIASES = {
+    "安装": "install",
+    "install": "install",
+    "installs": "install",
+    "mai": "install",
+    "aeo": "aeo",
+    "vo": "vo",
+    "value optimization": "vo",
+}
+
+
+def normalize_objective(value: object) -> str | None:
+    """优化方式原始值 → install/aeo/vo；空值、大小写、别名之外的 → None。"""
+    if value is None:
+        return None
+    return _OBJECTIVE_ALIASES.get(str(value).strip().lower())
 
 
 def _find_column(
@@ -157,6 +179,7 @@ def parse_excel(path: str) -> list[ParsedPerformanceRow]:
     d1_retention_col = _find_column(columns, *_D1_RETENTION_KEYS)
     cpi_col = _find_column(columns, *_CPI_KEYS)
     ipm_col = _find_column(columns, *_IPM_KEYS)
+    optimization_col = _find_column(columns, *_OPTIMIZATION_KEYS)
 
     if name_col is None:
         raise ApiError(400, "Excel 缺少名称列（列名需包含 'name' 或 '素材名称/名称'）")
@@ -204,6 +227,11 @@ def parse_excel(path: str) -> list[ParsedPerformanceRow]:
                 cpi=cpi,
                 ipm=ipm,
                 raw=raw,
+                optimization_type=(
+                    normalize_objective(record[optimization_col])
+                    if optimization_col
+                    else None
+                ),
             )
         )
 

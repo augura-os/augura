@@ -74,6 +74,8 @@ export interface PerformanceRecord {
   d1_retention: number | null;
   cpi: number | null;
   ipm: number | null;
+  /** 优化方式（install/aeo/vo；null = 旧数据/该列缺失），详情页按它分组展示 */
+  optimization_type?: string | null;
   raw: Record<string, unknown> | null;
 }
 
@@ -174,6 +176,10 @@ export interface RecommendationItem {
   reason_bits?: ReasonBit[];
   /** 赢家七分类标签（LabelCode；前端 brief.label.<code> 渲染，缺模板回退原码） */
   labels?: string[];
+  /** 主优化方式（install/aeo/vo；"" = 未知，判定回落 aeo 口径）；卡片徽章用 */
+  optimization_type?: string;
+  /** 非主桶消耗合计（混用素材中未参与本次判定的部分；>0 时有 mixed_objectives bit） */
+  mixed_spend?: number;
 }
 
 export interface RecommendationReport {

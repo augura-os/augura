@@ -22,6 +22,8 @@ creative_score 等消费方共用同一个 `aggregate()`，不允许各自重算
 | `market_count` | 派生字段，非 `aggregate()` 计算：`build_report` 注入——投放行按市场码归一后的 distinct 市场数；无投放行为 `0` |
 | `spend_share` / `payer_share` | 份额口径：单 creative 值 ÷ 全库合计。分发诊断（`distribution_hint`）基于每个 creative 最新 verdict 快照的 metrics JSONB 计算，不重聚合 Performance |
 | `main_market` | 派生字段，非 `aggregate()` 计算：`build_report` 注入——消耗最高变体的市场标签，无投放数据回退变体文件名前缀，再无则 `""` |
+| `optimization_type` | 派生字段，非 `aggregate()` 计算：`build_report` 注入——投放行按 `Performance.optimization_type`（`install`/`aeo`/`vo`，迁移 0020 从 raw「优化方式」列回填）分桶后**消耗最大桶**的键；无类型/无投放为 `""`。判定（`aggregate()` 与规则链）只喂主桶行；未知口径回落 aeo = 旧行为 |
+| `mixed_spend` | 派生字段，非 `aggregate()` 计算：非主桶消耗合计（混用素材中未参与本次判定的部分）；`> 0` 时追加补充理由 `mixed_objectives` |
 
 ## 相关约定
 

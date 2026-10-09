@@ -97,6 +97,24 @@ class TestComputeBaselines:
         baselines = compute_baselines(rows, PREFIXES)
         assert baselines["US"].ctr_median is None
 
+    def test_cpi_median_only_counts_creatives_with_installs(self) -> None:
+        rows = [
+            # 创意级 CPI = 创意内 sum(spend)/sum(installs)，再取市场中位数
+            _row("KS_EN-a.mp4", 500, 10, 0.02),
+            _row("KS_EN-b.mp4", 1000, 10, 0.02),
+            _row("KS_EN-c.mp4", 1500, 10, 0.02),
+        ]
+        rows[0].installs = 100  # CPI 5
+        rows[1].installs = 100  # CPI 10
+        # c 无安装：不参与 CPI 中位数（0 安装 ≠ 0 成本）
+        baselines = compute_baselines(rows, PREFIXES)
+        assert baselines["US"].cpi_median == 7.5
+
+    def test_cpi_median_none_when_no_installs(self) -> None:
+        rows = [_row("KS_EN-a.mp4", 500, 10, 0.02)]
+        baselines = compute_baselines(rows, PREFIXES)
+        assert baselines["US"].cpi_median is None
+
     def test_market_count_for_rows(self) -> None:
         rows = [
             _row("KS_EN-a.mp4", 100, 5, 0.02),

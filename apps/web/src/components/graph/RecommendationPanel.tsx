@@ -5,7 +5,7 @@ import { useRecommendations } from "../../hooks/useRecommendations";
 import { useMetricConfig } from "../../hooks/useMetricConfig";
 import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
-import { briefLabel, briefLine, formatDollars, priorityText, recommendationLines } from "./briefLine";
+import { briefLabel, briefLine, briefObjective, formatDollars, priorityText, recommendationLines } from "./briefLine";
 
 type Group = "urgent" | "optimize" | "healthy";
 
@@ -84,6 +84,7 @@ function ItemCard({
   const lines = recommendationLines(item, t);
   const evidence = lines.slice(1);
   const cpp = fmtCpp(item, cppRedLine, t("brief.zeroPayers"));
+  const objective = briefObjective(item.optimization_type, t);
   const tooltip = [
     item.creative_name,
     ...lines,
@@ -120,6 +121,11 @@ function ItemCard({
                 {briefLabel(code, t)}
               </span>
             ))}
+            {objective ? (
+              <span className="shrink-0 rounded bg-sky-50 px-1 py-px text-[10px] font-medium text-sky-600">
+                {objective}
+              </span>
+            ) : null}
             <span className="min-w-0 truncate text-[13px] font-medium text-neutral-800">
               {item.creative_name}
             </span>

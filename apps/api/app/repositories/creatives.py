@@ -37,6 +37,12 @@ class CreativeRepository:
     def get(self, creative_id: str) -> Creative | None:
         return self.db.get(Creative, creative_id)
 
+    def name_exists(self, name: str) -> bool:
+        return (
+            self.db.scalar(select(Creative.id).where(Creative.name == name).limit(1))
+            is not None
+        )
+
     def list_all(self) -> list[Creative]:
         return list(self.db.scalars(select(Creative)).all())
 

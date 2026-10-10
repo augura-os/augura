@@ -15,6 +15,7 @@ from app.exceptions import ApiError
 from app.models import AnalysisResult, Creative, CreativeAsset, CreativeVariant
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.settings import SettingsRepository
+from app.repositories.tags import TagRepository
 from app.services import embedding as embedding_service
 from app.services import pipeline
 from app.services.clustering import (
@@ -605,6 +606,81 @@ class TestSplitRemainderRecompute:
         # 新族只带被拆成员
         moved = VariantRepository(db_session).get(leaving_id)
         assert moved is not None and moved.creative_id != creative.id
+
+
+class TestSplitNaming:
+    """拆分新族命名：源族派生 slug（-split / -2…），不沿用 variant 文件名——
+    variant 名 = 上传文件名 stem，顶包会把生产文件名带进 Creative 层。"""
+
+    def _seed(
+        self, db_session: Session, source_name: str, tags: list[str]
+    ) -> tuple[Creative, CreativeVariant]:
+        creative = Creative(id=str(uuid.uuid4()), name=source_name)
+        asset = CreativeAsset(
+            id=str(uuid.uuid4()), filename="KS_EN_split-src.mp4",
+            file_type="video", storage_key=f"test/{uuid.uuid4()}",
+        )
+        variant = CreativeVariant(
+            id=str(uuid.uuid4()), creative_id=creative.id, asset_id=asset.id,
+            name="VID-DEMO-58-制作人甲-A8-竖",
+        )
+        db_session.add_all([creative, asset, variant])
+        db_session.flush()
+        if tags:
+            TagRepository(db_session).set_asset_tags(asset.id, tags)
+        return creative, variant
+
+    def test_split_name_derived_from_source_with_text_signature(
+        self, db_session: Session
+    ) -> None:
+        from app.api.routes.graph import split_variants
+        from app.schemas.graph import SplitRequest
+
+        creative, variant = self._seed(
+            db_session, "lava-escape-choices", ["beta-hook", "alpha-choice"]
+        )
+
+        result = split_variants(
+            SplitRequest(creative_id=creative.id, variant_ids=[variant.id]),
+            db_session,
+            get_settings(),
+        )
+        assert result.success is True
+        moved = VariantRepository(db_session).get(variant.id)
+        assert moved is not None
+        new_creative = CreativeRepository(db_session).get(moved.creative_id)
+        assert new_creative is not None
+        assert new_creative.name == "lava-escape-choices-split"
+        # 文本签名 = name + 排序去重后的标签（与上传管线同格式），
+        # 否则无向量时的文本聚类兜底对新族不可见
+        assert new_creative.representative_text == (
+            "lava-escape-choices-split alpha-choice beta-hook"
+        )
+
+    def test_split_name_dedupes_with_numeric_suffix(
+        self, db_session: Session
+    ) -> None:
+        from app.api.routes.graph import split_variants
+        from app.schemas.graph import SplitRequest
+
+        db_session.add(
+            Creative(id=str(uuid.uuid4()), name="lava-escape-choices-split")
+        )
+        creative, variant = self._seed(db_session, "lava-escape-choices", [])
+
+        result = split_variants(
+            SplitRequest(creative_id=creative.id, variant_ids=[variant.id]),
+            db_session,
+            get_settings(),
+        )
+        assert result.success is True
+        moved = VariantRepository(db_session).get(variant.id)
+        assert moved is not None
+        new_creative = CreativeRepository(db_session).get(moved.creative_id)
+        assert new_creative is not None
+        assert new_creative.name == "lava-escape-choices-split-2"
+        # 无标签时签名退化为纯名字（无尾部空格）
+        assert new_creative.representative_text == "lava-escape-choices-split-2"
 
 
 class TestBackfill:

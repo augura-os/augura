@@ -22,6 +22,7 @@ from app.models import Creative, SplitRuling
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import load_mirror, rebuild_mirror
+from app.repositories.tags import TagRepository
 from app.schemas.common import Envelope, ok
 from app.schemas.graph import (
     GraphEdgeOut,
@@ -242,10 +243,29 @@ def split_variants(
     # P0-3 口径：新族代表向量 = 有向量成员的真实均值（不再拿
     # variants[0].embedding 直接顶包），embedding_count = 参与均值的条数
     member_vectors = [v.embedding for v in variants if v.embedding]
+    # 新族名从源族派生（slug 约定一致、可溯源），不沿用 variant 名——
+    # variant 名 = 上传文件名 stem，顶包会把生产文件名带进 Creative 层。
+    base_name = f"{creative.name}-split" if creative.name else "Split Creative"
+    new_name = base_name
+    suffix = 2
+    while creative_repo.name_exists(new_name):
+        new_name = f"{base_name}-{suffix}"
+        suffix += 1
+    # 文本签名与上传管线同格式（name + tags），否则无向量时的文本聚类
+    # 兜底对拆分出的新族不可见。
+    tag_repo = TagRepository(db)
+    split_tag_names = sorted(
+        {
+            tag.name
+            for variant in variants
+            for tag in tag_repo.get_asset_tags(variant.asset_id)
+        }
+    )
     new_creative = creative_repo.create(
-        name=variants[0].name or "Split Creative",
+        name=new_name,
         representative_embedding=mean_embeddings(member_vectors),
         embedding_count=len(member_vectors),
+        representative_text=" ".join([new_name, *split_tag_names]),
     )
     for variant in variants:
         variant_repo.move_to_creative(variant, new_creative.id)

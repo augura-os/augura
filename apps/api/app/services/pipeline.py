@@ -129,7 +129,8 @@ def _measure_creative_alignment(
     """新素材本地视频 vs 候选族代表视频的 (帧对齐率, 裂变因子)；失败 → None。
 
     factor 来自 merge_measure.tier2_factor（与 missed_merge_scan 同一
-    过滤逻辑：仅 intro-sticker / brand-endcard 白名单且中段无发散时
+    过滤逻辑：仅 intro-sticker / brand-endcard 白名单且中段发散段数不
+    超容忍阈值时
     带出，tier-2 证据通道），其余一律 None。全程容错：测量失败不阻塞
     入库（调用方回退文本决策）。
     """

@@ -246,8 +246,9 @@ class TestAutoMergeExecute:
     def test_intro_sticker_factor_auto_merges(
         self, db_session: Session, monkeypatch
     ) -> None:
-        # A-B 结构：对齐率 0.55 够不到 0.90（数学上限），但中段零发散的
-        # intro-sticker 是 tier-2 物证 → 自动合并（与另外两道闸门同语义）
+        # A-B 结构：对齐率 0.55 够不到 0.90（数学上限），但中段发散在
+        # 容忍阈值内的 intro-sticker 是 tier-2 物证 → 自动合并（与另外
+        # 两道闸门同语义）
         first, second = self._harness(
             db_session, monkeypatch, alignment=0.55, factor="intro-sticker"
         )

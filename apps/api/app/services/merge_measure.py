@@ -11,7 +11,8 @@ LLM 预裁只看文本分析（hook/conflict/gameplay），换皮/误配对在�
 证据分两档：tier-1 是高对齐率（≥ MIN_ALIGNED_FRACTION_FOR_AUTO）；
 tier-2 是 classify 的确定性裂变因子（AUTO_MERGE_DERIVATION_FACTORS）——
 A-B 结构素材（前贴/尾帧不同 + 主体一致）对齐率有数学上限，够不到
-tier-1，但边缘未匹配段 + 中段无发散的测量特征本身就是同源物证。
+tier-1，但边缘未匹配段 + 中段基本无发散（≤ TIER2_MAX_DIVERGENT_SEGMENTS
+段，容忍抽帧噪点）的测量特征本身就是同源物证。
 """
 
 from __future__ import annotations
@@ -43,10 +44,15 @@ MIN_ALIGNED_FRACTION_FOR_AUTO = 0.90
 # brand-endcard 裂变。
 # 安全边界：classify 只在 aligned ≥ MIN_ALIGNED_FRACTION(0.5) 且边缘
 # 未匹配段 ≥ MIN_UNMATCHED_EDGE_SEC(2s) 时才给出这两个因子，且
-# 本模块额外要求中段无发散（见 tier2_factor）；aspect-ratio（画幅豁免
+# 本模块额外限制中段发散段数（见 tier2_factor）；aspect-ratio（画幅豁免
 # 路径对齐率可任意低）、None（测量定不了案）、not-a-derivation（疑似
 # 误链）一律不进本白名单。
 AUTO_MERGE_DERIVATION_FACTORS = ("intro-sticker", "brand-endcard")
+
+# tier-2 的中段发散容忍：1fps 抽帧下转场帧/字幕闪动等噪点会造成 1-2 段
+# 假发散，零容忍会误伤干净的 A-B 素材；实测的主体重剪案例是 10 段发散，
+# 仍会被本阈值拦下
+TIER2_MAX_DIVERGENT_SEGMENTS = 2
 
 
 def tier2_factor(
@@ -54,15 +60,18 @@ def tier2_factor(
 ) -> str | None:
     """classify 的确定性判定过滤为 tier-2 自动执行因子；不合格 → None。
 
-    白名单之外额外要求 ``divergent_segments`` 为空：classify 判
-    intro-sticker / brand-endcard 时不检查中段发散，但中段发散意味着
-    主体被重剪过（实测：对齐 66% + 前缀 3s + 中段 10 段发散仍被判
-    intro-sticker），与"A-B 结构仅边缘不同"的语义不符，不能作为不可逆
-    自动执行的物证。两道闸门（missed_merge_scan / pipeline 级联）统一
-    走本函数，语义保持一致。
+    白名单之外额外限制中段发散段数：classify 判 intro-sticker /
+    brand-endcard 时不检查中段发散，但大面积中段发散意味着主体被重剪过
+    （实测：对齐 66% + 前缀 3s + 中段 10 段发散仍被判 intro-sticker），
+    与"A-B 结构仅边缘不同"的语义不符，不能作为不可逆自动执行的物证；
+    ≤ TIER2_MAX_DIVERGENT_SEGMENTS 段按抽帧噪点容忍。两道闸门
+    （missed_merge_scan / pipeline 级联）统一走本函数，语义保持一致。
     """
     factor, _evidence = classify(diff, source_meta, target_meta)
-    if factor not in AUTO_MERGE_DERIVATION_FACTORS or diff.divergent_segments:
+    if (
+        factor not in AUTO_MERGE_DERIVATION_FACTORS
+        or len(diff.divergent_segments) > TIER2_MAX_DIVERGENT_SEGMENTS
+    ):
         return None
     return factor
 
@@ -94,8 +103,9 @@ def measure_pair_evidence(
     """候选对双方代表视频的测量证据：(aligned_fraction, factor)；失败 → None。
 
     factor 来自 variant_diff.classify 的确定性归因，经 tier2_factor
-    过滤：仅 intro-sticker / brand-endcard 白名单且中段无发散时带出；
-    None / not-a-derivation / aspect-ratio 等一律返回 None 作为 factor。
+    过滤：仅 intro-sticker / brand-endcard 白名单且中段发散段数
+    ≤ TIER2_MAX_DIVERGENT_SEGMENTS 时带出；None / not-a-derivation /
+    aspect-ratio 等一律返回 None 作为 factor。
     """
     try:
         asset_a = first_video_asset(db, creative_a_id)

@@ -112,9 +112,9 @@ class TestMeasurePairEvidence:
     def test_mid_divergence_disqualifies_factor(
         self, db_session: Session, monkeypatch
     ) -> None:
-        # 实测缺口回归：对齐 66% + 前缀 3s + 中段 10 段发散——classify
-        # 不检查中段发散仍判 intro-sticker，但主体被重剪过，不能作为
-        # 不可逆自动执行的物证 → factor None
+        # 实测重剪案例回归：对齐 66% + 前缀 3s + 中段 10 段发散——主体被
+        # 重剪过，远超噪点容忍（≤2 段），不能作为不可逆自动执行的物证
+        # → factor None
         a, b = _pair(db_session)
         diff = VariantDiff(
             aligned_fraction=0.66, unmatched_prefix_sec=3.0,
@@ -128,6 +128,32 @@ class TestMeasurePairEvidence:
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
         ) == (0.66, None)
+
+    def test_minor_divergence_within_noise_tolerance(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        # 1fps 抽帧的转场帧/字幕噪点会造成 1-2 段假发散：容忍阈值内
+        # factor 正常带出；超过阈值（3 段）按重剪拦截
+        a, b = _pair(db_session)
+        monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
+        for segments, expected in (
+            (1, "intro-sticker"),
+            (2, "intro-sticker"),
+            (3, None),
+        ):
+            diff = VariantDiff(
+                aligned_fraction=0.66, unmatched_prefix_sec=3.0,
+                unmatched_suffix_sec=0.0,
+                divergent_segments=[
+                    (float(i), float(i) + 1.0) for i in range(segments)
+                ],
+            )
+            monkeypatch.setattr(
+                merge_measure, "measure_pair", _measure(diff, duration_b=33.0)
+            )
+            assert measure_pair_evidence(
+                db_session, Settings(), a.id, b.id
+            ) == (0.66, expected)
 
     def test_high_alignment_without_factor(
         self, db_session: Session, monkeypatch

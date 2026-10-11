@@ -195,7 +195,8 @@ def run_merge_judgements(
             # 自动执行：LLM 3/3 判同一 + 视频物证（对齐率 ≥ 0.90，或
             # tier-2 确定性裂变因子——measure_pair_evidence 内部经
             # tier2_factor 三重过滤：intro-sticker/brand-endcard 白名单 +
-            # 中段零发散）+ 开关开 + 无既定裁决（上面已查）+ merge_guard
+            # 中段发散 ≤ TIER2_MAX_DIVERGENT_SEGMENTS 段）+ 开关开 +
+            # 无既定裁决（上面已查）+ merge_guard
             # 无 block，全部满足才合并；任一不满足维持只写建议
             if merge_auto and judgement.same_creative and judgement.votes == 3:
                 evidence = measure_pair_evidence(

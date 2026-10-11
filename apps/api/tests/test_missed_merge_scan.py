@@ -261,8 +261,8 @@ class TestScan:
         b = _creative(db_session, "alpha-beta-x1-x2-x3")
         self._patch_judge(monkeypatch, same=True)
         monkeypatch.setattr(
-            missed_merge_scan, "measure_pair_alignment",
-            lambda db, settings, x, y: 0.95,
+            missed_merge_scan, "measure_pair_evidence",
+            lambda db, settings, x, y: (0.95, None),
         )
         SettingsRepository(db_session).set("merge_auto_enabled", "true")
         db_session.flush()
@@ -284,14 +284,93 @@ class TestScan:
         b = _creative(db_session, "alpha-beta-x1-x2-x3")
         self._patch_judge(monkeypatch, same=True)
         monkeypatch.setattr(
-            missed_merge_scan, "measure_pair_alignment",
-            lambda db, settings, x, y: 0.95,
+            missed_merge_scan, "measure_pair_evidence",
+            lambda db, settings, x, y: (0.95, None),
         )
         SettingsRepository(db_session).set("merge_auto_enabled", "true")
         SettingsRepository(db_session).set(
             "judge_auto_enabled:merge_pair", "false"
         )
         db_session.flush()
+        stats = scan_missed_merges(
+            db_session, Settings(), None, emit=lambda _m: None
+        )
+        assert stats.merged == 0
+        assert stats.suggested == 1
+        assert db_session.get(Creative, a.id) is not None
+        assert db_session.get(Creative, b.id) is not None
+
+
+class TestTier2FactorGate:
+    """tier-2 证据通道：A-B 结构素材（前贴/尾帧不同 + 主体一致）对齐率
+    有数学上限够不到 0.90，classify 的确定性裂变因子作为并列物证。"""
+
+    def _patch_judge(self, monkeypatch) -> None:  # noqa: ANN001
+        monkeypatch.setattr(
+            missed_merge_scan, "judge_pair",
+            lambda config, *, analysis_a, analysis_b: MergeJudgement(
+                same_creative=True, votes=3, reason="判定理由",
+            ),
+        )
+
+    def _enable_auto(self, db_session: Session) -> None:
+        from app.repositories.settings import SettingsRepository
+
+        SettingsRepository(db_session).set("merge_auto_enabled", "true")
+        db_session.flush()
+
+    def test_intro_sticker_factor_auto_merges(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        # 15s 前贴 + 30s 全片：对齐率 ≈0.5（< 0.90），但测量判定
+        # intro-sticker → tier-2 证据成立，自动合并
+        a = _creative(db_session, "lava-escape-a1-b2-c3")
+        b = _creative(db_session, "lava-escape-x1-y2-z3")
+        self._patch_judge(monkeypatch)
+        monkeypatch.setattr(
+            missed_merge_scan, "measure_pair_evidence",
+            lambda db, settings, x, y: (0.50, "intro-sticker"),
+        )
+        self._enable_auto(db_session)
+        emitted: list[str] = []
+        stats = scan_missed_merges(
+            db_session, Settings(), None, emit=emitted.append
+        )
+        assert stats.merged == 1
+        assert db_session.get(Creative, b.id) is None
+        assert db_session.get(Creative, a.id) is not None
+        assert any("裂变因子 intro-sticker" in line for line in emitted)
+
+    def test_brand_endcard_factor_auto_merges(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        _creative(db_session, "lava-escape-a1-b2-c3")
+        b = _creative(db_session, "lava-escape-x7-y8-z9")
+        self._patch_judge(monkeypatch)
+        monkeypatch.setattr(
+            missed_merge_scan, "measure_pair_evidence",
+            lambda db, settings, x, y: (0.55, "brand-endcard"),
+        )
+        self._enable_auto(db_session)
+        stats = scan_missed_merges(
+            db_session, Settings(), None, emit=lambda _m: None
+        )
+        assert stats.merged == 1
+        assert db_session.get(Creative, b.id) is None
+
+    def test_low_alignment_without_factor_only_suggests(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        # 对齐率 0.45 < 0.50 → classify 判 not-a-derivation（factor=None），
+        # tier-1 / tier-2 都不成立 → 只写建议不合并
+        a = _creative(db_session, "lava-escape-a1-b2-c3")
+        b = _creative(db_session, "lava-escape-x1-y2-z3")
+        self._patch_judge(monkeypatch)
+        monkeypatch.setattr(
+            missed_merge_scan, "measure_pair_evidence",
+            lambda db, settings, x, y: (0.45, None),
+        )
+        self._enable_auto(db_session)
         stats = scan_missed_merges(
             db_session, Settings(), None, emit=lambda _m: None
         )
@@ -442,8 +521,8 @@ class TestEmbeddingScanFlow:
         a, b = self._embedded_pair(db_session)
         self._patch_judge(monkeypatch, same=True, votes=3)
         monkeypatch.setattr(
-            missed_merge_scan, "measure_pair_alignment",
-            lambda db, settings, x, y: 0.95,
+            missed_merge_scan, "measure_pair_evidence",
+            lambda db, settings, x, y: (0.95, None),
         )
         SettingsRepository(db_session).set("merge_auto_enabled", "true")
         db_session.flush()

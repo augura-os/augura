@@ -57,12 +57,13 @@ from app.services.embedding import (
 from app.services.judge_calibration import judge_auto_allowed
 from app.services.media import build_contact_sheet, extract_smart_frames
 from app.services.merge_measure import (
+    AUTO_MERGE_DERIVATION_FACTORS,
     MIN_ALIGNED_FRACTION_FOR_AUTO,
     first_video_asset,
 )
 from app.services.settings import resolve_ai_config
 from app.services.storage import StorageService
-from app.services.variant_diff import measure_pair
+from app.services.variant_diff import classify, measure_pair
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +124,13 @@ def _measure_creative_alignment(
     local_video: str,
     creative_id: str,
     tmp_dir: Path,
-) -> float | None:
-    """新素材本地视频 vs 候选族代表视频的帧对齐率；测不了/失败 → None。
+) -> tuple[float, str | None] | None:
+    """新素材本地视频 vs 候选族代表视频的 (帧对齐率, 裂变因子)；失败 → None。
 
-    全程容错：测量失败不阻塞入库（调用方回退文本决策）。
+    factor 仅当 variant_diff.classify 确定性判定为 intro-sticker /
+    brand-endcard（AUTO_MERGE_DERIVATION_FACTORS 白名单，tier-2 证据
+    通道）时带出，其余一律 None。全程容错：测量失败不阻塞入库（调用方
+    回退文本决策）。
     """
     try:
         candidate = first_video_asset(db, creative_id)
@@ -137,8 +141,13 @@ def _measure_creative_alignment(
             tmp_dir / f"candidate-{creative_id}{Path(filename).suffix.lower()}"
         )
         storage.download_to(storage_key, candidate_path)
-        _meta_new, _meta_cand, diff = measure_pair(local_video, candidate_path)
-        return diff.aligned_fraction
+        # 方向：source=新素材本地视频，target=候选族代表视频（与 measure_pair
+        # 的实参顺序一致；classify 的 unmatched_prefix/suffix 描述 target）
+        meta_new, meta_cand, diff = measure_pair(local_video, candidate_path)
+        factor, _evidence = classify(diff, meta_new, meta_cand)
+        if factor not in AUTO_MERGE_DERIVATION_FACTORS:
+            factor = None
+        return diff.aligned_fraction, factor
     except Exception:  # noqa: BLE001 — 测量失败 = 证据不足，回退文本路径
         logger.exception("聚类对齐测量失败 creative=%s", creative_id)
         return None
@@ -150,28 +159,28 @@ def _measure_candidates(
     local_video: str,
     candidates: list[tuple[Creative, float]],
     decision: ClusterDecision,
-) -> list[tuple[Creative, float]]:
+) -> list[tuple[Creative, float, str | None]]:
     """级联第 2 级：对文本召回候选跑视频帧对齐测量。
 
     只测文本分 ≥ BORDERLINE_LOW 的候选（控制测量成本）；margin <
-    CLUSTER_MARGIN 的双子候选连 top-2 一起测。返回 [(creative, 对齐率)]，
-    测量不可用的候选直接缺席。
+    CLUSTER_MARGIN 的双子候选连 top-2 一起测。返回 [(creative, 对齐率,
+    裂变因子)]，测量不可用的候选直接缺席。
     """
     eligible = [(c, s) for c, s in candidates if s >= BORDERLINE_LOW]
     if not eligible:
         return []
     twins = decision.margin is not None and decision.margin < CLUSTER_MARGIN
     targets = eligible[:2] if twins else eligible[:1]
-    results: list[tuple[Creative, float]] = []
+    results: list[tuple[Creative, float, str | None]] = []
     # 系统临时目录而非 settings.upload_dir（CI 无权限，同 merge_measure）
     tmp_dir = Path(tempfile.mkdtemp(prefix="cluster-measure-"))
     try:
         for creative, _score in targets:
-            aligned = _measure_creative_alignment(
+            evidence = _measure_creative_alignment(
                 db, storage, local_video, creative.id, tmp_dir
             )
-            if aligned is not None:
-                results.append((creative, aligned))
+            if evidence is not None:
+                results.append((creative, evidence[0], evidence[1]))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return results
@@ -191,8 +200,9 @@ def _cluster(
 ) -> tuple[Creative, str | None]:
     """Attach the asset's variant to the best-matching creative (§5).
 
-    三级级联：文本/向量 top-2 召回 → 视频测量裁决（对齐率 ≥ 0.90 直接
-    关联，物证优先于文本）→ 文本 margin 决策（top1 过阈值且 margin
+    三级级联：文本/向量 top-2 召回 → 视频测量裁决（对齐率 ≥ 0.90 或
+    classify 确定性裂变因子 intro-sticker/brand-endcard 直接关联，物证
+    优先于文本）→ 文本 margin 决策（top1 过阈值且 margin
     ≥ CLUSTER_MARGIN 才自动归；双子并列/低于阈值一律新建，候选对由
     收件箱合并机制人工裁）。测量不可用（非视频/下载失败）回退文本路径。
 
@@ -228,7 +238,7 @@ def _cluster(
     # 级联第 2 级：视频测量裁决（需要新素材本地视频 + 存储句柄）
     attach: Creative | None = None
     evidence = ""
-    measured: list[tuple[Creative, float]] = []
+    measured: list[tuple[Creative, float, str | None]] = []
     # cluster 类别闸（P0-2 两层模型：类别级失控只停本类别自动执行）：
     # 刹车期间不做自动归入——新素材落散点（新建 creative），连测量成本
     # 一起省；与 dna_assign/merge_pair 同一降级哲学
@@ -243,14 +253,23 @@ def _cluster(
     ):
         measured = _measure_candidates(db, storage, local_video, candidates, decision)
     winners = [
-        (c, a) for c, a in measured if a >= MIN_ALIGNED_FRACTION_FOR_AUTO
+        (c, a, f)
+        for c, a, f in measured
+        if a >= MIN_ALIGNED_FRACTION_FOR_AUTO or f in AUTO_MERGE_DERIVATION_FACTORS
     ]
     if winners:
-        attach, aligned = max(winners, key=lambda item: item[1])
-        evidence = (
-            f"视频帧对齐 {aligned:.0%} ≥ {MIN_ALIGNED_FRACTION_FOR_AUTO:.0%}"
-            f"（文本 {decision.score:.2f}）"
-        )
+        attach, aligned, factor = max(winners, key=lambda item: item[1])
+        if aligned >= MIN_ALIGNED_FRACTION_FOR_AUTO:
+            evidence = (
+                f"视频帧对齐 {aligned:.0%} ≥ {MIN_ALIGNED_FRACTION_FOR_AUTO:.0%}"
+                f"（文本 {decision.score:.2f}）"
+            )
+        else:
+            # tier-2 证据通道：A-B 结构（前贴/尾帧不同）对齐率有数学上限
+            evidence = (
+                f"视频帧对齐 {aligned:.0%}（{factor} 裂变证据；"
+                f"文本 {decision.score:.2f}）"
+            )
     elif cluster_auto and decision.action == "attach" and decision.creative is not None:
         attach = decision.creative
         margin_text = (
@@ -258,7 +277,7 @@ def _cluster(
         )
         evidence = f"文本 {decision.score:.2f} ≥ {threshold:.2f}{margin_text}"
         if measured:
-            aligned_text = " / ".join(f"{a:.0%}" for _c, a in measured)
+            aligned_text = " / ".join(f"{a:.0%}" for _c, a, _f in measured)
             evidence += f"；视频对齐 {aligned_text} 未达直接关联阈值"
 
     if attach is not None:

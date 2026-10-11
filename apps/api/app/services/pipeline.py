@@ -60,10 +60,11 @@ from app.services.merge_measure import (
     AUTO_MERGE_DERIVATION_FACTORS,
     MIN_ALIGNED_FRACTION_FOR_AUTO,
     first_video_asset,
+    tier2_factor,
 )
 from app.services.settings import resolve_ai_config
 from app.services.storage import StorageService
-from app.services.variant_diff import classify, measure_pair
+from app.services.variant_diff import measure_pair
 
 logger = logging.getLogger(__name__)
 
@@ -127,10 +128,10 @@ def _measure_creative_alignment(
 ) -> tuple[float, str | None] | None:
     """新素材本地视频 vs 候选族代表视频的 (帧对齐率, 裂变因子)；失败 → None。
 
-    factor 仅当 variant_diff.classify 确定性判定为 intro-sticker /
-    brand-endcard（AUTO_MERGE_DERIVATION_FACTORS 白名单，tier-2 证据
-    通道）时带出，其余一律 None。全程容错：测量失败不阻塞入库（调用方
-    回退文本决策）。
+    factor 来自 merge_measure.tier2_factor（与 missed_merge_scan 同一
+    过滤逻辑：仅 intro-sticker / brand-endcard 白名单且中段无发散时
+    带出，tier-2 证据通道），其余一律 None。全程容错：测量失败不阻塞
+    入库（调用方回退文本决策）。
     """
     try:
         candidate = first_video_asset(db, creative_id)
@@ -144,10 +145,7 @@ def _measure_creative_alignment(
         # 方向：source=新素材本地视频，target=候选族代表视频（与 measure_pair
         # 的实参顺序一致；classify 的 unmatched_prefix/suffix 描述 target）
         meta_new, meta_cand, diff = measure_pair(local_video, candidate_path)
-        factor, _evidence = classify(diff, meta_new, meta_cand)
-        if factor not in AUTO_MERGE_DERIVATION_FACTORS:
-            factor = None
-        return diff.aligned_fraction, factor
+        return diff.aligned_fraction, tier2_factor(diff, meta_new, meta_cand)
     except Exception:  # noqa: BLE001 — 测量失败 = 证据不足，回退文本路径
         logger.exception("聚类对齐测量失败 creative=%s", creative_id)
         return None

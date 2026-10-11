@@ -109,6 +109,26 @@ class TestMeasurePairEvidence:
             db_session, Settings(), a.id, b.id
         ) == (0.45, None)
 
+    def test_mid_divergence_disqualifies_factor(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        # 实测缺口回归：对齐 66% + 前缀 3s + 中段 10 段发散——classify
+        # 不检查中段发散仍判 intro-sticker，但主体被重剪过，不能作为
+        # 不可逆自动执行的物证 → factor None
+        a, b = _pair(db_session)
+        diff = VariantDiff(
+            aligned_fraction=0.66, unmatched_prefix_sec=3.0,
+            unmatched_suffix_sec=0.0,
+            divergent_segments=[(float(i), float(i) + 1.0) for i in range(10)],
+        )
+        monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
+        monkeypatch.setattr(
+            merge_measure, "measure_pair", _measure(diff, duration_b=33.0)
+        )
+        assert measure_pair_evidence(
+            db_session, Settings(), a.id, b.id
+        ) == (0.66, None)
+
     def test_high_alignment_without_factor(
         self, db_session: Session, monkeypatch
     ) -> None:

@@ -7,7 +7,8 @@
   3/3 一致自动归族（edit_logs 标 auto:），2/3 写建议缓存
 - 合并：review.merge_candidate_items 的候选对走 merge_judge（3 票防偏），
   不满足自动门禁的一律只写建议缓存供收件箱一键确认；LLM 3/3 判同一 +
-  pHash 帧对齐率 ≥ 0.90（视频物证）+ 无既定裁决 + merge_auto_enabled
+  视频物证（pHash 帧对齐率 ≥ 0.90，或 tier-2 确定性裂变因子
+  intro-sticker / brand-endcard）+ 无既定裁决 + merge_auto_enabled
   开启（默认开）→ 自动执行合并（edit_logs 标 auto:）
 - 失败静默，不阻塞；judge_auto_enabled 总闸或对应类别闸为 false 时
   只写缓存不自动执行（judge_auto_allowed 口径）
@@ -38,7 +39,7 @@ from app.services.merge_guard import find_db_ruling, find_prior_ruling
 from app.services.merge_judge import judge_pair
 from app.services.merge_measure import (
     MIN_ALIGNED_FRACTION_FOR_AUTO,
-    measure_pair_alignment,
+    measure_pair_evidence,
 )
 from app.services.settings import AIConfig
 
@@ -191,14 +192,27 @@ def run_merge_judgements(
                 continue
             verdict = "merge" if judgement.same_creative else "split"
 
-            # 自动执行：LLM 3/3 判同一 + pHash 对齐率 ≥ 0.90（视频物证）+
-            # 开关开 + 无既定裁决（上面已查）+ merge_guard 无 block，
-            # 全部满足才合并；任一不满足维持只写建议
+            # 自动执行：LLM 3/3 判同一 + 视频物证（对齐率 ≥ 0.90，或
+            # tier-2 确定性裂变因子——measure_pair_evidence 内部经
+            # tier2_factor 三重过滤：intro-sticker/brand-endcard 白名单 +
+            # 中段发散 ≤ TIER2_MAX_DIVERGENT_SEGMENTS 段）+ 开关开 +
+            # 无既定裁决（上面已查）+ merge_guard
+            # 无 block，全部满足才合并；任一不满足维持只写建议
             if merge_auto and judgement.same_creative and judgement.votes == 3:
-                alignment = measure_pair_alignment(
+                evidence = measure_pair_evidence(
                     db, settings, item.creative_id, item.related_creative_id
                 )
-                if alignment is not None and alignment >= MIN_ALIGNED_FRACTION_FOR_AUTO:
+                channel: str | None = None
+                if evidence is not None:
+                    alignment, factor = evidence
+                    if alignment >= MIN_ALIGNED_FRACTION_FOR_AUTO:
+                        channel = (
+                            f"对齐 {alignment:.0%}"
+                            f" ≥ {MIN_ALIGNED_FRACTION_FOR_AUTO:.0%}"
+                        )
+                    elif factor is not None:
+                        channel = f"裂变因子 {factor}（对齐 {alignment:.0%}）"
+                if channel is not None:
                     try:
                         # 方向：item.related → item.creative（候选对的首个成员保留）
                         merge_ops.merge_creatives(
@@ -222,13 +236,16 @@ def run_merge_judgements(
                             right_id=item.creative_id,
                         )
                         logger.info(
-                            "auto  merged %s（对齐 %.0f%%）", item.title[:50], alignment * 100
+                            "auto  merged %s（%s）", item.title[:50], channel
                         )
                         if commit:
                             db.commit()
                         continue
                 else:
-                    logger.info("measure %r < 0.90，只写建议：%s", alignment, item.title[:50])
+                    logger.info(
+                        "measure 物证不足（对齐率 < 0.90 且无 tier-2 裂变因子，"
+                        "测量结果 %r），只写建议：%s", evidence, item.title[:50]
+                    )
 
             upsert_suggestion(
                 db, kind="merge_pair", left_id=item.creative_id,

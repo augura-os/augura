@@ -14,7 +14,8 @@
 
 排除：已有裁决（split_rulings / case-rulings）、观察对、同族（同 DNA）、
 已归档 creative。判定沿用 merge_judge 3 票防偏；双证据齐（LLM 3/3 +
-pHash 对齐 ≥0.90）且 merge_auto_enabled + judge_auto_allowed(merge_pair)
+视频物证：pHash 对齐 ≥0.90 或 classify 确定性裂变因子 intro-sticker /
+brand-endcard）且 merge_auto_enabled + judge_auto_allowed(merge_pair)
 开才自动合并（merge_ops），否则写收件箱建议（reason 带三路证据）。
 
 幂等：upsert 唯一约束 + 已合并的creative不再成对。挂载点：上传管线
@@ -46,9 +47,10 @@ from app.services.judge_suggestions import delete_suggestion, upsert_suggestion
 from app.services.merge_guard import find_prior_ruling
 from app.services.merge_judge import judge_pair
 from app.services.merge_measure import (
+    AUTO_MERGE_DERIVATION_FACTORS,
     MIN_ALIGNED_FRACTION_FOR_AUTO,
     first_video_asset,
-    measure_pair_alignment,
+    measure_pair_evidence,
 )
 from app.services.settings import AIConfig, resolve_ai_config
 from app.services.storage import StorageService
@@ -408,17 +410,26 @@ def scan_missed_merges(
                     db.commit()  # 对级短事务：下一对的 LLM 不跨本对未提交写
             continue
         stats.judged_merge += 1
-        alignment = None
+        alignment: float | None = None
+        factor: str | None = None
         if judgement.votes == 3:
-            alignment = measure_pair_alignment(
+            evidence_pair = measure_pair_evidence(
                 db, settings, pair.left.id, pair.right.id
             )
-        if (
-            auto_merge
-            and judgement.votes == 3
-            and alignment is not None
-            and alignment >= MIN_ALIGNED_FRACTION_FOR_AUTO
-        ):
+            if evidence_pair is not None:
+                alignment, factor = evidence_pair
+        # 视频物证二选一：tier-1 高对齐率，或 tier-2 确定性裂变因子
+        # （A-B 结构对齐率有数学上限，见 merge_measure 常量注释）
+        evidence_channel: str | None = None
+        if alignment is not None and alignment >= MIN_ALIGNED_FRACTION_FOR_AUTO:
+            evidence_channel = (
+                f"对齐 {alignment:.0%} ≥ {MIN_ALIGNED_FRACTION_FOR_AUTO:.0%}"
+            )
+        elif factor in AUTO_MERGE_DERIVATION_FACTORS:
+            evidence_channel = (
+                f"裂变因子 {factor}（对齐 {alignment:.0%}）"
+            )
+        if auto_merge and judgement.votes == 3 and evidence_channel is not None:
             try:
                 merge_ops.merge_creatives(
                     db, settings, pair.right.id, pair.left.id,
@@ -437,7 +448,7 @@ def scan_missed_merges(
                     db, kind="merge_pair",
                     left_id=pair.right.id, right_id=pair.left.id,
                 )
-                emit(f"       判定: 自动合并（对齐 {alignment:.0%}）")
+                emit(f"       判定: 自动合并（{evidence_channel}）")
                 if commit:
                     db.commit()  # 对级短事务：合并结果立即落库释放行锁
                 continue

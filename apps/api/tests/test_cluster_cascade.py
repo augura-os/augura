@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -18,6 +17,7 @@ from app.models import Creative, CreativeAsset, CreativeVariant, EditLog
 from app.repositories.settings import SettingsRepository
 from app.services import pipeline
 from app.services.pipeline import _cluster
+from app.services.variant_diff import VariantDiff, VideoMeta
 
 
 class _FakeStorage:
@@ -69,8 +69,26 @@ def _local_video(tmp_path: Path) -> str:
     return str(path)
 
 
-def _measure(aligned: float):
-    return lambda _a, _b: (None, None, SimpleNamespace(aligned_fraction=aligned))
+def _meta(duration: float = 30.0) -> VideoMeta:
+    return VideoMeta(width=1080, height=1920, duration=duration, has_audio=True)
+
+
+def _diff(
+    aligned: float, *, prefix: float = 0.0, suffix: float = 0.0
+) -> VariantDiff:
+    return VariantDiff(
+        aligned_fraction=aligned,
+        unmatched_prefix_sec=prefix,
+        unmatched_suffix_sec=suffix,
+    )
+
+
+def _measure(aligned: float, *, prefix: float = 0.0, suffix: float = 0.0):
+    def _run(_a: str, _b: str):  # noqa: ANN202
+        diff = _diff(aligned, prefix=prefix, suffix=suffix)
+        return _meta(), _meta(30.0 + prefix + suffix), diff
+
+    return _run
 
 
 def _cluster_logs(db: Session, creative_id: str) -> list[EditLog]:
@@ -176,7 +194,7 @@ class TestMeasuredOverride:
 
         def _measure_by_path(_src: str, dst: str):  # noqa: ANN202
             aligned = 0.95 if b.id in dst else 0.30
-            return None, None, SimpleNamespace(aligned_fraction=aligned)
+            return _meta(), _meta(), _diff(aligned)
 
         monkeypatch.setattr(pipeline, "measure_pair", _measure_by_path)
         asset = _new_asset(db_session)
@@ -198,6 +216,52 @@ class TestMeasuredOverride:
             lambda _n, _t, _cs, limit=2: [(existing, 0.25)][:limit],
         )
         monkeypatch.setattr(pipeline, "measure_pair", _measure(0.30))
+        asset = _new_asset(db_session)
+        creative, _ = _cluster(
+            db_session, asset, "new-thing", None, "new thing",
+            settings=_settings(tmp_path),
+            storage=_FakeStorage(_settings(tmp_path)),
+            local_video=_local_video(tmp_path),
+        )
+        assert creative.id != existing.id
+        assert _cluster_logs(db_session, existing.id) == []
+
+    def test_intro_sticker_factor_attaches_below_alignment_gate(
+        self, db_session: Session, tmp_path: Path, monkeypatch
+    ) -> None:
+        # A-B 结构：候选族代表视频多 15s 前贴、主体一致 → 对齐率 0.55
+        # 够不到 0.90（数学上限），但 classify 确定性判定 intro-sticker
+        # → tier-2 证据通道直接关联
+        existing = _creative_with_video(db_session, name="lava-escape-bridge")
+        monkeypatch.setattr(
+            pipeline, "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [(existing, 0.25)][:limit],
+        )
+        monkeypatch.setattr(pipeline, "measure_pair", _measure(0.55, prefix=15.0))
+        asset = _new_asset(db_session)
+        creative, _ = _cluster(
+            db_session, asset, "whatever", None, "whatever",
+            settings=_settings(tmp_path),
+            storage=_FakeStorage(_settings(tmp_path)),
+            local_video=_local_video(tmp_path),
+        )
+        assert creative.id == existing.id
+        logs = _cluster_logs(db_session, existing.id)
+        assert len(logs) == 1
+        assert "视频帧对齐 55%" in logs[0].new_value
+        assert "intro-sticker 裂变证据" in logs[0].new_value
+
+    def test_below_half_alignment_is_not_a_derivation_creates(
+        self, db_session: Session, tmp_path: Path, monkeypatch
+    ) -> None:
+        # 对齐率 0.45 < 0.50 → classify 判 not-a-derivation（无 tier-2
+        # 因子），文本 0.25 也不过阈值 → 新建
+        existing = _creative_with_video(db_session, name="lava-escape-cave")
+        monkeypatch.setattr(
+            pipeline, "top_creative_matches_by_text",
+            lambda _n, _t, _cs, limit=2: [(existing, 0.25)][:limit],
+        )
+        monkeypatch.setattr(pipeline, "measure_pair", _measure(0.45, prefix=12.0))
         asset = _new_asset(db_session)
         creative, _ = _cluster(
             db_session, asset, "new-thing", None, "new thing",
@@ -267,7 +331,7 @@ class TestMeasurementFallback:
 
         def _spy(a: str, b: str):  # noqa: ANN202
             calls.append(a)
-            return None, None, SimpleNamespace(aligned_fraction=0.99)
+            return _meta(), _meta(), _diff(0.99)
 
         monkeypatch.setattr(pipeline, "measure_pair", _spy)
         asset = _new_asset(db_session)

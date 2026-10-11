@@ -7,6 +7,12 @@ LLM 预裁只看文本分析（hook/conflict/gameplay），换皮/误配对在�
 
 全程容错：无视频变体 / 下载失败 / 测量失败一律返回 None（调用方按
 "证据不足"处理——只写建议，绝不自动合并）。
+
+证据分两档：tier-1 是高对齐率（≥ MIN_ALIGNED_FRACTION_FOR_AUTO）；
+tier-2 是 classify 的确定性裂变因子（AUTO_MERGE_DERIVATION_FACTORS）——
+A-B 结构素材（前贴/尾帧不同 + 主体一致）对齐率有数学上限，够不到
+tier-1，但边缘未匹配段 + 中段基本无发散（≤ TIER2_MAX_DIVERGENT_SEGMENTS
+段，容忍抽帧噪点）的测量特征本身就是同源物证。
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.services.storage import StorageService
-from app.services.variant_diff import measure_pair
+from app.services.variant_diff import VariantDiff, VideoMeta, classify, measure_pair
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,45 @@ logger = logging.getLogger(__name__)
 # （换皮/重剪都会显著拉低对齐率；裂变侧 MIN_ALIGNED_FRACTION=0.5 只是
 # "有同源关系"的下限，不足以支撑不可逆的自动合并）
 MIN_ALIGNED_FRACTION_FOR_AUTO = 0.90
+
+# tier-2 证据通道：variant_diff.classify 的确定性判定里，只有这两个因子
+# 可以作为与"aligned ≥ 0.90"并列的自动执行物证。
+# 背景：A-B 结构素材（前贴/尾帧不同 + 主体完全相同）的 aligned_fraction
+# 数学上限 = 主体帧数 / 总帧数（如 15s 前贴 + 15s 主体 → 上限 0.5），
+# 永远够不到 0.90，但 classify 能确定性判定其为 intro-sticker /
+# brand-endcard 裂变。
+# 安全边界：classify 只在 aligned ≥ MIN_ALIGNED_FRACTION(0.5) 且边缘
+# 未匹配段 ≥ MIN_UNMATCHED_EDGE_SEC(2s) 时才给出这两个因子，且
+# 本模块额外限制中段发散段数（见 tier2_factor）；aspect-ratio（画幅豁免
+# 路径对齐率可任意低）、None（测量定不了案）、not-a-derivation（疑似
+# 误链）一律不进本白名单。
+AUTO_MERGE_DERIVATION_FACTORS = ("intro-sticker", "brand-endcard")
+
+# tier-2 的中段发散容忍：1fps 抽帧下转场帧/字幕闪动等噪点会造成 1-2 段
+# 假发散，零容忍会误伤干净的 A-B 素材；实测的主体重剪案例是 10 段发散，
+# 仍会被本阈值拦下
+TIER2_MAX_DIVERGENT_SEGMENTS = 2
+
+
+def tier2_factor(
+    diff: VariantDiff, source_meta: VideoMeta, target_meta: VideoMeta
+) -> str | None:
+    """classify 的确定性判定过滤为 tier-2 自动执行因子；不合格 → None。
+
+    白名单之外额外限制中段发散段数：classify 判 intro-sticker /
+    brand-endcard 时不检查中段发散，但大面积中段发散意味着主体被重剪过
+    （实测：对齐 66% + 前缀 3s + 中段 10 段发散仍被判 intro-sticker），
+    与"A-B 结构仅边缘不同"的语义不符，不能作为不可逆自动执行的物证；
+    ≤ TIER2_MAX_DIVERGENT_SEGMENTS 段按抽帧噪点容忍。两道闸门
+    （missed_merge_scan / pipeline 级联）统一走本函数，语义保持一致。
+    """
+    factor, _evidence = classify(diff, source_meta, target_meta)
+    if (
+        factor not in AUTO_MERGE_DERIVATION_FACTORS
+        or len(diff.divergent_segments) > TIER2_MAX_DIVERGENT_SEGMENTS
+    ):
+        return None
+    return factor
 
 _VIDEO_ASSET_SQL = text(
     "select a.id, a.storage_key, a.filename from creative_variants v "
@@ -49,13 +94,19 @@ def first_video_asset(db: Session, creative_id: str) -> tuple[str, str] | None:
     return row[1], row[2]
 
 
-def measure_pair_alignment(
+def measure_pair_evidence(
     db: Session,
     settings: Settings,
     creative_a_id: str,
     creative_b_id: str,
-) -> float | None:
-    """候选对双方代表视频的帧对齐率（0-1）；测不了/失败返回 None。"""
+) -> tuple[float, str | None] | None:
+    """候选对双方代表视频的测量证据：(aligned_fraction, factor)；失败 → None。
+
+    factor 来自 variant_diff.classify 的确定性归因，经 tier2_factor
+    过滤：仅 intro-sticker / brand-endcard 白名单且中段发散段数
+    ≤ TIER2_MAX_DIVERGENT_SEGMENTS 时带出；None / not-a-derivation /
+    aspect-ratio 等一律返回 None 作为 factor。
+    """
     try:
         asset_a = first_video_asset(db, creative_a_id)
         asset_b = first_video_asset(db, creative_b_id)
@@ -70,12 +121,24 @@ def measure_pair_alignment(
             path_b = str(tmp_dir / f"b{Path(asset_b[1]).suffix.lower()}")
             storage.download_to(asset_a[0], path_a)
             storage.download_to(asset_b[0], path_b)
-            _meta_a, _meta_b, diff = measure_pair(path_a, path_b)
+            meta_a, meta_b, diff = measure_pair(path_a, path_b)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
-        return diff.aligned_fraction
+        factor = tier2_factor(diff, meta_a, meta_b)
+        return diff.aligned_fraction, factor
     except Exception:  # noqa: BLE001 — 测量失败 = 证据不足，不抛给判定主流程
         logger.exception(
             "合并对齐测量失败 creatives=%s,%s", creative_a_id, creative_b_id
         )
         return None
+
+
+def measure_pair_alignment(
+    db: Session,
+    settings: Settings,
+    creative_a_id: str,
+    creative_b_id: str,
+) -> float | None:
+    """候选对双方代表视频的帧对齐率（0-1）；测不了/失败返回 None。"""
+    evidence = measure_pair_evidence(db, settings, creative_a_id, creative_b_id)
+    return None if evidence is None else evidence[0]

@@ -152,10 +152,11 @@ class TestScopedMergeJudgements:
 
 
 class TestAutoMergeExecute:
-    """合并自动执行的决策矩阵：LLM 3/3 + pHash 对齐 ≥0.90 + 开关开 →
-    自动合并（edit_logs 标 auto:、无建议残留）；任一不满足只写建议。
+    """合并自动执行的决策矩阵：LLM 3/3 + 视频物证（pHash 对齐 ≥0.90 或
+    tier-2 裂变因子）+ 开关开 → 自动合并（edit_logs 标 auto:、无建议
+    残留）；任一不满足只写建议。
 
-    LLM（judge_pair）与测量（measure_pair_alignment）全部 mock；
+    LLM（judge_pair）与测量（measure_pair_evidence）全部 mock；
     Neo4j 同步 patch 成 no-op（测试机的 Neo4j 不能写测试节点）。
     """
 
@@ -179,6 +180,7 @@ class TestAutoMergeExecute:
         *,
         votes: int = 3,
         alignment: float | None = 0.95,
+        factor: str | None = None,
         merge_auto: str | None = "true",
     ) -> tuple[Creative, Creative]:
         first, second = self._setup_pair(db)
@@ -189,8 +191,10 @@ class TestAutoMergeExecute:
             ),
         )
         monkeypatch.setattr(
-            judge_pipeline, "measure_pair_alignment",
-            lambda db, settings, a, b: alignment,
+            judge_pipeline, "measure_pair_evidence",
+            lambda db, settings, a, b: (
+                None if alignment is None else (alignment, factor)
+            ),
         )
         _patch_graph_sync(monkeypatch)
         if merge_auto is not None:
@@ -238,6 +242,37 @@ class TestAutoMergeExecute:
         suggestions = self._merge_pair_suggestions(db_session)
         assert len(suggestions) == 1
         assert suggestions[0].verdict == "merge"
+
+    def test_intro_sticker_factor_auto_merges(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        # A-B 结构：对齐率 0.55 够不到 0.90（数学上限），但中段零发散的
+        # intro-sticker 是 tier-2 物证 → 自动合并（与另外两道闸门同语义）
+        first, second = self._harness(
+            db_session, monkeypatch, alignment=0.55, factor="intro-sticker"
+        )
+        self._run(db_session)
+        survivors = [c for c in (first, second) if db_session.get(Creative, c.id)]
+        assert len(survivors) == 1
+        assert self._merge_pair_suggestions(db_session) == []
+        logs = db_session.scalars(
+            select(EditLog).where(EditLog.action == "merge")
+        ).all()
+        assert len(logs) == 1
+        assert logs[0].new_value.startswith("auto:")
+
+    def test_mid_divergence_disqualified_factor_only_suggests(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        # 对齐 0.66 + 前贴，但中段发散导致 tier2_factor 判不合格——
+        # measure_pair_evidence 返回 (0.66, None)，本层只能按"无物证"处理
+        first, second = self._harness(
+            db_session, monkeypatch, alignment=0.66, factor=None
+        )
+        self._run(db_session)
+        assert db_session.get(Creative, first.id) is not None
+        assert db_session.get(Creative, second.id) is not None
+        assert len(self._merge_pair_suggestions(db_session)) == 1
 
     def test_no_alignment_evidence_only_suggests(
         self, db_session: Session, monkeypatch

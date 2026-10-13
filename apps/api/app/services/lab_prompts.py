@@ -20,7 +20,7 @@ from typing import Any, Final
 
 from app.services import lab_taxonomy as tax
 
-LAB_PROMPT_VERSION: Final = "lab-v0.1.1"
+LAB_PROMPT_VERSION: Final = "lab-v0.1.2"
 
 
 def _enum(rows: Any, *extra: str) -> list[str]:
@@ -285,6 +285,10 @@ def diagnosis_system() -> str:
             "不输出 schema 之外的字段。",
             "8. 输出语言：除枚举 id 外，全部字段一律使用简体中文，不夹杂英文"
             "（专有名词/品牌名/外文原词引用除外）。",
+            "9. 输出务必紧凑：各数组字段条数上限——选择链 ≤6、key_visuals ≤8、"
+            "fixed/reskinnable/do_not_copy 各 ≤6、strong_feedback_points ≤6、"
+            "mappable_points/mapping_gaps/missing_product_facts 各 ≤8、"
+            "uncertainties ≤6；每条一句话，优先覆盖与质量，禁止凑数式冗长。",
         ]
     )
 

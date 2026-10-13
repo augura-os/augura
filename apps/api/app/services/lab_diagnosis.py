@@ -1,9 +1,10 @@
 """Creative Lab 定性诊断编排（M1）。
 
 观察层（analysis_results）+ product-facts + 受众上下文 + 图证据 →
-LLM（lab_prompts 诊断 prompt，max_tokens 4000）→ lab_validate 校验
-（非法输出重试一次，仍非法则抛错不写库）→ evidence_label 服务端钳制
-→ creative_diagnoses 按 (asset_id, prompt_version) 幂等 upsert。
+LLM（lab_prompts 诊断 prompt，max_tokens 见 DIAGNOSIS_MAX_TOKENS）→
+lab_validate 校验（非法输出重试一次，仍非法则抛错不写库）→
+evidence_label 服务端钳制 → creative_diagnoses 按
+(asset_id, prompt_version) 幂等 upsert。
 
 业务异常由路由层映状态码：asset 缺失 404 / 观察层未就绪 409 /
 AI key 未配置 409 / 诊断生成失败 502。
@@ -38,7 +39,11 @@ logger = logging.getLogger(__name__)
 # 图证据相似度阈值：与聚类 CLUSTER_THRESHOLD 同口径（余弦 ≥ 0.85 视为同族证据）
 GRAPH_EVIDENCE_THRESHOLD = 0.85
 
-DIAGNOSIS_MAX_TOKENS = 4000
+# 推理型端点（如 k 系）会把 completion 预算的大半烧在不可见 reasoning
+# tokens 上（实测 4000 中 reasoning 占 2400-3300），正文 JSON 被截断。
+# 16000 = 思考 ~4k + 正文 ~4k 的充足余量；配合 prompt 的数组条数上限，
+# 典型实际消耗 ~6-8k，不会顶满。
+DIAGNOSIS_MAX_TOKENS = 16000
 
 
 class LabAssetNotFoundError(RuntimeError):

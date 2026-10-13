@@ -125,7 +125,7 @@ class TestSuccess:
         assert row.audience_context == {"region": "FAKE"}
         assert row.product_facts_snapshot is None  # 未配置 product_facts
         assert len(llm_mocks) == 1
-        assert llm_mocks[0]["max_tokens"] == 4000
+        assert llm_mocks[0]["max_tokens"] == lab_diagnosis.DIAGNOSIS_MAX_TOKENS
         # 落库可读回
         stored = CreativeDiagnosisRepository(db_session).get_current(
             asset.id, LAB_PROMPT_VERSION

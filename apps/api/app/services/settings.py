@@ -458,3 +458,55 @@ def resolve_score_config(db: Session, market: str | None = None) -> ScoreConfig:
         cpp_pause_line=metric_thresholds["cpp_pause_line"],
         roas_green_line=metric_thresholds["roas_green_line"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Product facts（Creative Lab M1）：诊断 prompt 注入的产品事实配置。
+# 品类不复存——现有 project_category 键（resolve_genre）即品类。
+# ---------------------------------------------------------------------------
+
+PRODUCT_FACTS_KEY = "product_facts"
+
+# 允许的键与形状：core_loop 一句话核心循环；其余均为字符串数组
+PRODUCT_FACTS_STR_KEY = "core_loop"
+PRODUCT_FACTS_LIST_KEYS = (
+    "selling_points",
+    "must_show",
+    "forbidden_claims",
+    "compliance_limits",
+    "success_metric_defs",
+)
+PRODUCT_FACTS_ALLOWED_KEYS = (PRODUCT_FACTS_STR_KEY, *PRODUCT_FACTS_LIST_KEYS)
+
+
+def resolve_product_facts(db: Session) -> dict[str, object]:
+    """settings 键 product_facts 的解析：诊断用产品事实。
+
+    非法（非 JSON dict / 已知键值类型错）整体丢弃返回 {}（与
+    market_thresholds 的「非法丢弃」同纪律）；未知键单独丢弃，
+    已知合法键保留。
+    """
+    raw = SettingsRepository(db).get(PRODUCT_FACTS_KEY)
+    if raw is None:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    facts: dict[str, object] = {}
+    for key, value in payload.items():
+        if key not in PRODUCT_FACTS_ALLOWED_KEYS:
+            continue  # 未知键丢弃
+        if key == PRODUCT_FACTS_STR_KEY:
+            if not isinstance(value, str):
+                return {}
+            facts[key] = value
+        else:
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
+                return {}
+            facts[key] = list(value)
+    return facts

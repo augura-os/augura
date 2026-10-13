@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -40,6 +42,8 @@ class SettingsInfo(BaseModel):
     archive_score_threshold: float = 30.0
     archive_idle_days: int = 7
     lifecycle_auto_enabled: bool = True
+    # 产品事实（Creative Lab M1）：诊断 prompt 注入用；{} = 未配置
+    product_facts: dict[str, object] = {}
 
 
 class AiModelsInfo(BaseModel):
@@ -82,3 +86,6 @@ class SettingsUpdate(BaseModel):
     archive_idle_days: int | None = None
     lifecycle_auto_enabled: bool | None = None
     market_prefixes: list[str] | None = None
+    # 产品事实（Creative Lab M1）。故意收 Any：形状错误（非 dict/未知键/
+    # 键值类型错）要在路由层统一报 400，而不是 pydantic 422
+    product_facts: Any = None

@@ -48,6 +48,10 @@ from app.services.settings import (
     MARKET_THRESHOLDS_SETTING,
     METRIC_PROFILE_SETTING,
     METRIC_THRESHOLDS_SETTING,
+    PRODUCT_FACTS_ALLOWED_KEYS,
+    PRODUCT_FACTS_KEY,
+    PRODUCT_FACTS_LIST_KEYS,
+    PRODUCT_FACTS_STR_KEY,
     SCORE_WEIGHT_CONFIDENCE_SETTING,
     SCORE_WEIGHT_EVOLUTION_SETTING,
     SCORE_WEIGHT_FRESHNESS_SETTING,
@@ -58,6 +62,7 @@ from app.services.settings import (
     resolve_ai_config,
     resolve_market_threshold_overrides,
     resolve_metric_config,
+    resolve_product_facts,
     resolve_score_config,
     test_provider_connection,
 )
@@ -127,6 +132,7 @@ def get_settings_info(db: DbDep, settings: SettingsDep) -> Envelope[SettingsInfo
             archive_score_threshold=score_config.archive_score_threshold,
             archive_idle_days=score_config.archive_idle_days,
             lifecycle_auto_enabled=score_config.auto_enabled,
+            product_facts=resolve_product_facts(db),
         )
     )
 
@@ -301,6 +307,39 @@ def update_settings(
                 params={"prefixes": ", ".join(bad)},
             )
         repo.set(MARKET_PREFIXES_SETTING, ",".join(cleaned))
+    if payload.product_facts is not None:
+        if not isinstance(payload.product_facts, dict):
+            raise ApiError(
+                400,
+                "product_facts 必须是对象",
+                code="settings_product_facts_not_dict",
+            )
+        for key, value in payload.product_facts.items():
+            if key not in PRODUCT_FACTS_ALLOWED_KEYS:
+                raise ApiError(
+                    400,
+                    f"未知 product_facts 键：{key}",
+                    code="settings_unknown_product_facts_key",
+                    params={"key": key},
+                )
+            if key == PRODUCT_FACTS_STR_KEY and not isinstance(value, str):
+                raise ApiError(
+                    400,
+                    f"product_facts.{key} 必须是字符串",
+                    code="settings_product_facts_bad_value",
+                    params={"key": key},
+                )
+            if key in PRODUCT_FACTS_LIST_KEYS and (
+                not isinstance(value, list)
+                or not all(isinstance(item, str) for item in value)
+            ):
+                raise ApiError(
+                    400,
+                    f"product_facts.{key} 必须是字符串数组",
+                    code="settings_product_facts_bad_value",
+                    params={"key": key},
+                )
+        repo.set(PRODUCT_FACTS_KEY, json.dumps(payload.product_facts))
     db.commit()
     return get_settings_info(db, settings)
 

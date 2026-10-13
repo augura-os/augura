@@ -6,10 +6,15 @@ const ACCEPT_ATTR = ".mp4,.mov,.qt,.png,.jpg,.jpeg,.xlsx,.xls";
 
 interface DropZoneProps {
   onFiles: (files: File[]) => void;
+  /** 文件类型过滤（默认视频/图片/Excel 全量；Creative Lab 只收视频/图片） */
+  accept?: string;
+  /** 主/副文案（默认英文旧文案；调用方可传 i18n 文本） */
+  title?: string;
+  subtitle?: string;
 }
 
 /** Drag-and-drop zone for video / image / Facebook Excel uploads. */
-export function DropZone({ onFiles }: DropZoneProps) {
+export function DropZone({ onFiles, accept = ACCEPT_ATTR, title, subtitle }: DropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -42,16 +47,16 @@ export function DropZone({ onFiles }: DropZoneProps) {
     >
       <UploadCloud className="h-8 w-8 text-neutral-400" />
       <p className="text-sm font-medium text-neutral-900">
-        Drop files here, or click to browse
+        {title ?? "Drop files here, or click to browse"}
       </p>
       <p className="text-xs text-neutral-500">
-        Video (mp4, mov) · Image (png, jpg, jpeg) · Facebook Excel (xlsx, xls)
+        {subtitle ?? "Video (mp4, mov) · Image (png, jpg, jpeg) · Facebook Excel (xlsx, xls)"}
       </p>
       <input
         ref={inputRef}
         type="file"
         multiple
-        accept={ACCEPT_ATTR}
+        accept={accept}
         className="hidden"
         onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : [];

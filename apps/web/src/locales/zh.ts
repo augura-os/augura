@@ -321,7 +321,7 @@ export const zh: Record<string, string> = {
   "error.settings_archive_threshold_not_positive": "归档评分阈值必须为正数",
   "error.settings_archive_idle_not_positive": "归档闲置天数必须为正数",
   "error.settings_bad_market_prefix": "市场前缀必须是 2-8 位大写字母/下划线：{prefixes}",
-  "error.ai_key_not_configured": "API key 未配置，请先保存",
+  "error.ai_key_not_configured": "API key 未配置，请先到 Settings 页保存",
   "error.ai_base_url_not_configured": "Base URL 未配置，请先保存",
   "error.ai_key_invalid": "API key 无效或已过期（401）",
   "error.ai_timeout": "连接超时（{seconds} 秒无响应），请检查 Base URL",
@@ -329,6 +329,8 @@ export const zh: Record<string, string> = {
   "error.ai_models_unsupported": "端点返回 404——请检查 Base URL 是否完整（例如 Kimi 是 https://api.moonshot.cn/v1，注意 /v1）；若确认 URL 无误，则该端点不支持模型列表，请手填模型名",
   "error.ai_http_error": "端点返回错误（HTTP {status}）",
   "error.ai_empty_models": "连接正常，但端点返回的模型列表为空",
+  "error.lab_observation_not_ready": "观察层未就绪：AI 分析完成后才能生成定性报告",
+  "error.lab_diagnosis_invalid_output": "诊断输出未通过校验（已自动重试一次仍失败），请重试",
 
   // --- 合并条 ---
   "graph.merge.selected": "已选 {n}/2 个创意",

@@ -327,7 +327,7 @@ export const en: Record<string, string> = {
   "error.settings_archive_threshold_not_positive": "Archive score threshold must be positive",
   "error.settings_archive_idle_not_positive": "Archive idle days must be positive",
   "error.settings_bad_market_prefix": "Market prefixes must be 2-8 uppercase letters/underscores: {prefixes}",
-  "error.ai_key_not_configured": "API key not configured — save it first",
+  "error.ai_key_not_configured": "API key not configured — save one on the Settings page first",
   "error.ai_base_url_not_configured": "Base URL not configured — save it first",
   "error.ai_key_invalid": "API key invalid or expired (401)",
   "error.ai_timeout": "Connection timed out (no response for {seconds}s) — check the Base URL",
@@ -335,6 +335,8 @@ export const en: Record<string, string> = {
   "error.ai_models_unsupported": "Endpoint returned 404 — check the Base URL is complete (e.g. Kimi is https://api.moonshot.cn/v1, note the /v1); if the URL is correct, this endpoint does not support model listing — type the model name manually",
   "error.ai_http_error": "Endpoint returned an error (HTTP {status})",
   "error.ai_empty_models": "Connection OK, but the endpoint returned an empty model list",
+  "error.lab_observation_not_ready": "Observation layer not ready — the AI analysis must finish before a diagnosis can run",
+  "error.lab_diagnosis_invalid_output": "Diagnosis output failed validation (one automatic retry already attempted) — please try again",
 
   // --- merge bar ---
   "graph.merge.selected": "{n}/2 creatives selected",

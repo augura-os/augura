@@ -43,7 +43,7 @@ function patchItem(
 }
 
 /** 跳过原因：优先按 code 查 upload.skip.* 模板；缺码/缺模板回退后端 reason。 */
-function skippedReasonText(skipped: SkippedFile): string {
+export function skippedReasonText(skipped: SkippedFile): string {
   const code = skipped.code?.replace(/^upload_/, "") ?? "";
   const key = `upload.skip.${code}`;
   const template = code ? translate(key) : key;
@@ -51,7 +51,7 @@ function skippedReasonText(skipped: SkippedFile): string {
 }
 
 /** 重叠警告：优先按 code 查 upload.warning.* 模板插值；回退后端 message。 */
-function warningText(warning: UploadWarning): string {
+export function warningText(warning: UploadWarning): string {
   const key = `upload.warning.${warning.code.replace(/^upload_/, "")}`;
   const template = translate(key);
   if (template === key) return warning.message;

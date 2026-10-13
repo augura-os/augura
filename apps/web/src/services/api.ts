@@ -6,12 +6,15 @@ import type {
   ApiResponse,
   AssetDetail,
   AssetListItem,
+  CreateDiagnosisRequest,
   Derivation,
   DerivationFactor,
   DerivationVerdict,
   DnaFamily,
   EvolutionChain,
   GraphResponse,
+  LabAnalysisResponse,
+  LabDiagnosis,
   MergeRequest,
   PerformanceRecord,
   RecommendationReport,
@@ -283,5 +286,40 @@ export function updateLifecycle(
       `/creatives/${creativeId}/lifecycle`,
       body,
     ),
+  );
+}
+
+// --- Creative Lab (M1) -------------------------------------------------------
+
+/** POST /lab/references — 竞品参考上传（与 /upload 同一 ingest；
+ *  新建 asset 自动打 competitor-reference 标签并进分析队列）。 */
+export function uploadLabReference(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append("files", file);
+  return unwrap(
+    apiClient.post<ApiResponse<UploadResponse>>("/lab/references", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 300000,
+      onUploadProgress: (event) => {
+        if (onProgress && event.total && event.total > 0) {
+          onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+        }
+      },
+    }),
+  );
+}
+
+/** GET /lab/analysis/{assetId} — 观察层 + 当前诊断 + 证据只读视图（轮询用）。 */
+export function getLabAnalysis(assetId: string): Promise<LabAnalysisResponse> {
+  return unwrap(apiClient.get<ApiResponse<LabAnalysisResponse>>(`/lab/analysis/${assetId}`));
+}
+
+/** POST /lab/diagnoses — 同步跑定性诊断（LLM 调用，常态 10–30s），给长超时。 */
+export function createLabDiagnosis(body: CreateDiagnosisRequest): Promise<LabDiagnosis> {
+  return unwrap(
+    apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", body, { timeout: 180000 }),
   );
 }

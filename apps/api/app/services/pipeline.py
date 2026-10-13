@@ -29,14 +29,14 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
-from app.models import AnalysisResult, Creative, CreativeAsset
+from app.models import AnalysisResult, Creative, CreativeAsset, Tag
 from app.repositories.analysis import AnalysisRepository
 from app.repositories.assets import AssetRepository
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import rebuild_mirror
 from app.repositories.jobs import JobRepository
-from app.repositories.tags import TagRepository
+from app.repositories.tags import TagRepository, preserve_sticky_tags
 from app.schemas.analysis import AnalysisPayload
 from app.services import graph_sync
 from app.services.analysis import AnalysisService
@@ -402,6 +402,21 @@ def _payload_from_result(result: AnalysisResult) -> AnalysisPayload:
     )
 
 
+def _set_tags_preserving_sources(
+    db: Session, asset_id: str, incoming: list[str]
+) -> list[Tag]:
+    """pipeline 自动打标签（replace 语义），但不抹 sticky 来源标记。
+
+    AI 每次重分析都用 payload.tags 整体替换；competitor-reference 这类
+    人工/入口赋予的来源标签必须留存（见 repositories/tags.STICKY_SOURCE_TAGS）。
+    """
+    tag_repo = TagRepository(db)
+    existing_names = [tag.name for tag in tag_repo.get_asset_tags(asset_id)]
+    return tag_repo.set_asset_tags(
+        asset_id, preserve_sticky_tags(existing_names, incoming)
+    )
+
+
 def _redownload_for_measure(
     storage: StorageService, asset: CreativeAsset, tmp_dir: Path
 ) -> str | None:
@@ -473,7 +488,7 @@ def _run_analysis_pipeline(
             # 向量是上次分析产出的——provenance 戳沿用 analysis 行上的原戳
             # （迁移前的存量行为 None = 未知模型，语义正确）
             embedding_model = existing.embedding_model
-            tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
+            tags = _set_tags_preserving_sources(db, asset.id, payload.tags)
             if asset.file_type == "video":
                 local_video = _redownload_for_measure(storage, asset, tmp_dir)
         else:
@@ -487,7 +502,7 @@ def _run_analysis_pipeline(
             analysis = analysis_repo.upsert(
                 asset.id, payload, engine_version=engine_version
             )
-            tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
+            tags = _set_tags_preserving_sources(db, asset.id, payload.tags)
 
             # Embedding 只写入（shadow）：抽象层按 embedding_backend 分发
             # （off/provider/local），失败降级 None——attach 判定恒走文本通道。

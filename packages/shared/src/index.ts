@@ -438,6 +438,17 @@ export interface ProductFacts {
   success_metric_defs?: string[];
 }
 
+/** POST /settings/product-facts/import 返回：产品资料文件的 LLM 解析结果。
+ *  不落库——前端回填表单、用户检查后走 PUT /settings 保存。 */
+export interface ProductFactsImportResult {
+  /** 抽取出的产品事实（固定六键，资料未覆盖的键为空值） */
+  product_facts: ProductFacts;
+  /** 抽取文本字符数（截断前） */
+  extracted_chars: number;
+  /** 资料过长，抽取文本被截断 */
+  truncated: boolean;
+}
+
 /** 诊断受众上下文（全可选 string；全空按未提供处理）。 */
 export interface LabAudience {
   gender?: string;

@@ -125,7 +125,7 @@ Project、Creative、CreativeVariant、CreativeAsset、Performance、Tag、TagAs
 | `/upload` | Upload | 拖拽上传（mp4/mov/png/jpg/xlsx/xls），POST `/upload`，显示上传进度与结果。 |
 | `/assets` | Asset List | 表格：缩略图、文件名、上传时间、AI 分析状态、Creative 名称；搜索框（`?search=`）。行点击进入详情。 |
 | `/assets/:id` | Asset Detail | 左侧视频播放器（`/assets/{id}/media`）；右侧 AI 分析结果表单：Hook/Conflict/Gameplay/Reward/Character/Environment/Tags/Summary，可编辑，点击保存 PUT `/assets/{id}`。 |
-| `/settings` | Settings | 配置 OpenAI Key、判定阈值与 product-facts 产品事实（GET/PUT `/settings`）。 |
+| `/settings` | Settings | 配置 OpenAI Key、判定阈值与 product-facts 产品事实（GET/PUT `/settings`）。区块由 `?section=<id>` 深链（无参默认首区块）；产品资料文件（md/txt/docx/pdf）可经 POST `/settings/product-facts/import` 解析回填表单（不落库，检查后走 PUT 保存）。 |
 
 ### UI 规范
 

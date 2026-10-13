@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { ArrowDown, ArrowUp, FileUp, Loader2, Plus, Trash2 } from "lucide-react";
 import type { AiTestResult, EmbeddingBackend } from "@shared";
 import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
-import { fetchAiModels, testAiConnection } from "../services/api";
+import { fetchAiModels, importProductFacts, testAiConnection } from "../services/api";
 import {
   DEFAULT_THRESHOLDS,
   JUDGEABLE_METRICS,
@@ -125,7 +126,16 @@ export default function SettingsPage() {
   const t = useT();
   const { data, isLoading, isError, error } = useSettings();
   const updateMutation = useUpdateSettings();
-  const [section, setSection] = useState<SectionId>("general");
+  // section 由 URL 驱动（?section=）：无参/未知值回退首区块 general，裸链行为不变
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sectionParam = searchParams.get("section");
+  const section: SectionId = SECTIONS.some((item) => item.id === sectionParam)
+    ? (sectionParam as SectionId)
+    : "general";
+  const selectSection = (id: SectionId) => {
+    // 首区块保持裸链 /settings；其余区块写 ?section=<id>
+    setSearchParams(id === "general" ? {} : { section: id });
+  };
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [visionModel, setVisionModel] = useState("");
@@ -168,6 +178,10 @@ export default function SettingsPage() {
   const [complianceLimits, setComplianceLimits] = useState<string[]>([]);
   const [successMetricDefs, setSuccessMetricDefs] = useState<string[]>([]);
   const [factsFeedback, setFactsFeedback] = useState<string>("");
+  const [factsFeedbackOk, setFactsFeedbackOk] = useState(false);
+  // 产品资料文件上传解析（POST /settings/product-facts/import；只回填表单不自动保存）
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (data) {
@@ -350,13 +364,44 @@ export default function SettingsPage() {
       {
         onSuccess: () => {
           setFactsFeedback(t("common.saved"));
+          setFactsFeedbackOk(true);
           setTimeout(() => setFactsFeedback(""), 3000);
         },
         onError: (mutationError) => {
           setFactsFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
+          setFactsFeedbackOk(false);
         },
       },
     );
+  };
+
+  // 上传产品资料自动解析：结果只回填表单 state（不自动保存），
+  // 用户检查后点「保存产品事实」走正常 PUT（human-in-the-loop）
+  const onImportProductFacts = (file: File) => {
+    setImporting(true);
+    importProductFacts(file)
+      .then((result) => {
+        const facts = result.product_facts ?? {};
+        setCoreLoop(facts.core_loop ?? "");
+        setSellingPoints(facts.selling_points ?? []);
+        setMustShow(facts.must_show ?? []);
+        setForbiddenClaims(facts.forbidden_claims ?? []);
+        setComplianceLimits(facts.compliance_limits ?? []);
+        setSuccessMetricDefs(facts.success_metric_defs ?? []);
+        setFactsFeedback(
+          result.truncated
+            ? t("settings.productFacts.importedTruncated")
+            : t("settings.productFacts.imported"),
+        );
+        setFactsFeedbackOk(true);
+      })
+      .catch((importError) => {
+        setFactsFeedback(
+          apiErrorText(importError, t) || t("settings.productFacts.importFailed"),
+        );
+        setFactsFeedbackOk(false);
+      })
+      .finally(() => setImporting(false));
   };
 
   const toggleInList = (list: string[], key: string, order: string[]): string[] =>
@@ -419,7 +464,7 @@ export default function SettingsPage() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setSection(item.id)}
+                onClick={() => selectSection(item.id)}
                 className={cn(
                   "w-full rounded-md px-3 py-1.5 text-left text-sm transition",
                   section === item.id
@@ -672,6 +717,37 @@ export default function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center gap-3 rounded-md border border-dashed border-[#e5e5e5] bg-neutral-50 px-3 py-2.5">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={importing}
+                onClick={() => importFileRef.current?.click()}
+              >
+                {importing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileUp className="h-3.5 w-3.5" />
+                )}
+                {importing
+                  ? t("settings.productFacts.importing")
+                  : t("settings.productFacts.import")}
+              </Button>
+              <p className="text-xs text-neutral-400">{t("settings.productFacts.importHint")}</p>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".md,.txt,.docx,.pdf"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) onImportProductFacts(file);
+                  // 清空 value 允许重选同一文件再次解析
+                  event.target.value = "";
+                }}
+              />
+            </div>
+
             <div className="space-y-1.5">
               <Label htmlFor="core_loop">{t("settings.productFacts.coreLoop")}</Label>
               <Textarea
@@ -738,7 +814,7 @@ export default function SettingsPage() {
               {factsFeedback ? (
                 <span
                   className={
-                    factsFeedback === t("common.saved") ? "text-sm text-emerald-600" : "text-sm text-red-600"
+                    factsFeedbackOk ? "text-sm text-emerald-600" : "text-sm text-red-600"
                   }
                 >
                   {factsFeedback}

@@ -140,7 +140,7 @@ export function ReportStep({ session }: ReportStepProps) {
           <p className="font-medium text-neutral-800">{t("lab.report.factsEmptyTitle")}</p>
           <p className="mt-0.5">{t("lab.report.factsEmptyDesc")}</p>
           <Link
-            to="/settings"
+            to="/settings?section=product-facts"
             className="mt-1 inline-block font-medium text-neutral-900 underline underline-offset-2 hover:text-neutral-600"
           >
             {t("lab.report.factsEmptyLink")}

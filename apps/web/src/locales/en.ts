@@ -337,6 +337,11 @@ export const en: Record<string, string> = {
   "error.ai_empty_models": "Connection OK, but the endpoint returned an empty model list",
   "error.lab_observation_not_ready": "Observation layer not ready — the AI analysis must finish before a diagnosis can run",
   "error.lab_diagnosis_invalid_output": "Diagnosis output failed validation (one automatic retry already attempted) — please try again",
+  "error.product_facts_import_unsupported_type": "Unsupported file type: {filename} (md/txt/docx/pdf only)",
+  "error.product_facts_import_empty_file": "Empty file: {filename}",
+  "error.product_facts_import_too_large": "File exceeds the size limit: {filename} (max {limit})",
+  "error.product_facts_import_unreadable": "Could not extract text from file: {filename} (corrupted or no text layer)",
+  "error.product_facts_import_invalid_output": "Parse failed: the model output failed validation twice — please try again",
 
   // --- merge bar ---
   "graph.merge.selected": "{n}/2 creatives selected",
@@ -505,11 +510,26 @@ export const en: Record<string, string> = {
   "lab.audience.subtitle":
     "All optional and injected into the diagnosis prompt; leave empty for a generic audience. Reference: ",
   "lab.audience.gender": "Gender",
-  "lab.audience.genderPlaceholder": "e.g. Any / Male / Female",
   "lab.audience.age": "Age",
-  "lab.audience.agePlaceholder": "e.g. 25-44",
   "lab.audience.region": "Region",
-  "lab.audience.regionPlaceholder": "e.g. US / BR / SEA",
+  "lab.audience.option.any": "Any",
+  "lab.audience.option.male": "Male",
+  "lab.audience.option.female": "Female",
+  "lab.audience.option.age.18-24": "18–24",
+  "lab.audience.option.age.25-34": "25–34",
+  "lab.audience.option.age.35-44": "35–44",
+  "lab.audience.option.age.45-54": "45–54",
+  "lab.audience.option.age.55+": "55+",
+  "lab.audience.option.region.T1-EN": "T1 English",
+  "lab.audience.option.region.US": "United States",
+  "lab.audience.option.region.PT-BR": "Brazil (PT-BR)",
+  "lab.audience.option.region.ES-LATAM": "LatAm Spanish (ES-LATAM)",
+  "lab.audience.option.region.SEA": "Southeast Asia",
+  "lab.audience.option.region.JP-KR": "Japan & Korea",
+  "lab.audience.option.region.EU": "Europe",
+  "lab.audience.option.region.MENA": "Middle East",
+  "lab.audience.option.region.custom": "Custom…",
+  "lab.audience.regionCustomPlaceholder": "e.g. Canada / Nordics",
   "lab.audience.category": "Category",
   "lab.audience.categoryPlaceholder": "e.g. SLG / idle tycoon",
   "lab.audience.categoryHint":
@@ -782,6 +802,14 @@ export const en: Record<string, string> = {
   "settings.productFacts.moveDown": "Move down",
   "settings.productFacts.orderedHint":
     "Order is priority; diagnosis selling-point mapping candidates come only from this list.",
+  "settings.productFacts.import": "Parse from product doc",
+  "settings.productFacts.importing": "Parsing…",
+  "settings.productFacts.importHint":
+    "Accepts .md/.txt/.docx/.pdf up to 5 MB; results only fill the form — review, then save manually",
+  "settings.productFacts.imported": "Parsed from file — review, then save",
+  "settings.productFacts.importedTruncated":
+    "Parsed from file; the doc was too long and got truncated — review, then save",
+  "settings.productFacts.importFailed": "Parse failed, please retry",
   "settings.productFacts.save": "Save product facts",
   "settings.telemetry.title": "Creative Genome Program",
   "settings.telemetry.desc1":

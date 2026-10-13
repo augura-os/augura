@@ -17,6 +17,7 @@ import type {
   LabDiagnosis,
   MergeRequest,
   PerformanceRecord,
+  ProductFactsImportResult,
   RecommendationReport,
   ReviewQueue,
   RunAnalysisRequest,
@@ -252,6 +253,24 @@ export function testAiConnection(visionModel?: string): Promise<AiTestResult> {
     apiClient.post<ApiResponse<AiTestResult>>("/settings/ai/test", {
       vision_model: visionModel || null,
     }),
+  );
+}
+
+/** POST /settings/product-facts/import — 上传产品资料文件（md/txt/docx/pdf），
+ *  LLM 解析为 product_facts。不落库：返回结果回填表单，用户检查后走 PUT 保存。
+ *  LLM 解析同步执行，放宽超时（与 runAnalysis 同口径）。 */
+export function importProductFacts(file: File): Promise<ProductFactsImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  return unwrap(
+    apiClient.post<ApiResponse<ProductFactsImportResult>>(
+      "/settings/product-facts/import",
+      form,
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 180000,
+      },
+    ),
   );
 }
 

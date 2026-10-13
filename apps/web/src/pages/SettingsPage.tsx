@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import type { AiTestResult, EmbeddingBackend } from "@shared";
 import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
@@ -17,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
+import { Textarea } from "../components/ui/textarea";
 import { aiTestResultText, apiErrorText } from "../lib/apiErrorText";
 import { useLanguage, useT, type Lang } from "../lib/i18n";
 import { cn } from "../lib/utils";
@@ -70,6 +72,7 @@ const marketCodeOf = (prefix: string, codes: string[]): string => {
 const SECTIONS = [
   { id: "general", labelKey: "settings.nav.general" },
   { id: "ai", labelKey: "settings.nav.ai" },
+  { id: "product-facts", labelKey: "settings.nav.productFacts" },
   { id: "metrics", labelKey: "settings.nav.metrics" },
   { id: "scoring", labelKey: "settings.nav.scoring" },
   { id: "autojudge", labelKey: "settings.nav.autojudge" },
@@ -157,6 +160,14 @@ export default function SettingsPage() {
   const [archiveScoreThreshold, setArchiveScoreThreshold] = useState<number>(30);
   const [archiveIdleDays, setArchiveIdleDays] = useState<number>(7);
   const [scoreFeedback, setScoreFeedback] = useState<string>("");
+  // 产品事实（Creative Lab M1）：诊断 prompt 注入用
+  const [coreLoop, setCoreLoop] = useState("");
+  const [sellingPoints, setSellingPoints] = useState<string[]>([]);
+  const [mustShow, setMustShow] = useState<string[]>([]);
+  const [forbiddenClaims, setForbiddenClaims] = useState<string[]>([]);
+  const [complianceLimits, setComplianceLimits] = useState<string[]>([]);
+  const [successMetricDefs, setSuccessMetricDefs] = useState<string[]>([]);
+  const [factsFeedback, setFactsFeedback] = useState<string>("");
 
   useEffect(() => {
     if (data) {
@@ -182,6 +193,13 @@ export default function SettingsPage() {
       setScoreWeights(data.score_weights ?? {});
       setArchiveScoreThreshold(data.archive_score_threshold ?? 30);
       setArchiveIdleDays(data.archive_idle_days ?? 7);
+      const facts = data.product_facts ?? {};
+      setCoreLoop(facts.core_loop ?? "");
+      setSellingPoints(facts.selling_points ?? []);
+      setMustShow(facts.must_show ?? []);
+      setForbiddenClaims(facts.forbidden_claims ?? []);
+      setComplianceLimits(facts.compliance_limits ?? []);
+      setSuccessMetricDefs(facts.success_metric_defs ?? []);
     }
   }, [data]);
 
@@ -309,6 +327,33 @@ export default function SettingsPage() {
         },
         onError: (mutationError) => {
           setScoreFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
+        },
+      },
+    );
+  };
+
+  // 产品事实：一次 PUT 全量六键；空行 trim 后丢弃，空 list 提交空数组
+  const onSaveProductFacts = () => {
+    const clean = (list: string[]) =>
+      list.map((item) => item.trim()).filter((item) => item.length > 0);
+    updateMutation.mutate(
+      {
+        product_facts: {
+          core_loop: coreLoop.trim(),
+          selling_points: clean(sellingPoints),
+          must_show: clean(mustShow),
+          forbidden_claims: clean(forbiddenClaims),
+          compliance_limits: clean(complianceLimits),
+          success_metric_defs: clean(successMetricDefs),
+        },
+      },
+      {
+        onSuccess: () => {
+          setFactsFeedback(t("common.saved"));
+          setTimeout(() => setFactsFeedback(""), 3000);
+        },
+        onError: (mutationError) => {
+          setFactsFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
         },
       },
     );
@@ -614,6 +659,92 @@ export default function SettingsPage() {
                 {t("settings.savedNote")}
               </p>
             ) : null}
+          </CardContent>
+        </Card>
+        ) : null}
+
+        {section === "product-facts" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("settings.productFacts.title")}</CardTitle>
+            <CardDescription>
+              {t("settings.productFacts.description")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="core_loop">{t("settings.productFacts.coreLoop")}</Label>
+              <Textarea
+                id="core_loop"
+                placeholder={t("settings.productFacts.coreLoopPlaceholder")}
+                value={coreLoop}
+                onChange={(event) => setCoreLoop(event.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.sellingPoints")}</Label>
+              <StringListEditor
+                items={sellingPoints}
+                onChange={setSellingPoints}
+                addLabel={t("settings.productFacts.addItem")}
+                reorderable
+              />
+              <p className="text-xs text-neutral-400">
+                {t("settings.productFacts.orderedHint")}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.mustShow")}</Label>
+              <StringListEditor
+                items={mustShow}
+                onChange={setMustShow}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.forbiddenClaims")}</Label>
+              <StringListEditor
+                items={forbiddenClaims}
+                onChange={setForbiddenClaims}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.complianceLimits")}</Label>
+              <StringListEditor
+                items={complianceLimits}
+                onChange={setComplianceLimits}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.successMetricDefs")}</Label>
+              <StringListEditor
+                items={successMetricDefs}
+                onChange={setSuccessMetricDefs}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button onClick={onSaveProductFacts} disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? t("common.saving") : t("settings.productFacts.save")}
+              </Button>
+              {factsFeedback ? (
+                <span
+                  className={
+                    factsFeedback === t("common.saved") ? "text-sm text-emerald-600" : "text-sm text-red-600"
+                  }
+                >
+                  {factsFeedback}
+                </span>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
         ) : null}
@@ -970,6 +1101,80 @@ export default function SettingsPage() {
         ) : null}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface StringListEditorProps {
+  items: string[];
+  onChange: (items: string[]) => void;
+  addLabel: string;
+  /** 有序列表（如卖点清单）开启上移/下移 */
+  reorderable?: boolean;
+}
+
+/** 字符串列表编辑器（product-facts 各清单共用）：行内编辑 + 增删，可选排序。 */
+function StringListEditor({ items, onChange, addLabel, reorderable = false }: StringListEditorProps) {
+  const t = useT();
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= items.length) return;
+    const next = [...items];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+  return (
+    <div className="space-y-1.5">
+      {items.map((item, index) => (
+        <div key={index} className="flex items-center gap-1">
+          <Input
+            value={item}
+            onChange={(event) =>
+              onChange(items.map((prev, i) => (i === index ? event.target.value : prev)))
+            }
+            autoComplete="off"
+          />
+          {reorderable ? (
+            <>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                disabled={index === 0}
+                onClick={() => move(index, -1)}
+                title={t("settings.productFacts.moveUp")}
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                disabled={index === items.length - 1}
+                onClick={() => move(index, 1)}
+                title={t("settings.productFacts.moveDown")}
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : null}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 shrink-0 text-neutral-400 hover:text-red-600"
+            onClick={() => onChange(items.filter((_, i) => i !== index))}
+            title={t("settings.productFacts.removeItem")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ))}
+      <div>
+        <Button size="sm" variant="outline" onClick={() => onChange([...items, ""])}>
+          <Plus className="h-3.5 w-3.5" />
+          {addLabel}
+        </Button>
       </div>
     </div>
   );

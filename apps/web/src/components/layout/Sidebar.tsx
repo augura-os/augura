@@ -1,9 +1,10 @@
 import { NavLink } from "react-router-dom";
-import { FolderOpen, Github, Network, Settings, Upload } from "lucide-react";
+import { FlaskConical, FolderOpen, Github, Network, Settings, Upload } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 const navItems = [
-  { to: "/", label: "Graph", icon: Network, end: true },
+  { to: "/lab", label: "Lab", icon: FlaskConical, end: true },
+  { to: "/graph", label: "Graph", icon: Network, end: false },
   { to: "/upload", label: "Upload", icon: Upload, end: false },
   { to: "/assets", label: "Assets", icon: FolderOpen, end: false },
   { to: "/settings", label: "Settings", icon: Settings, end: false },

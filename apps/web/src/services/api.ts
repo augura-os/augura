@@ -336,9 +336,10 @@ export function getLabAnalysis(assetId: string): Promise<LabAnalysisResponse> {
   return unwrap(apiClient.get<ApiResponse<LabAnalysisResponse>>(`/lab/analysis/${assetId}`));
 }
 
-/** POST /lab/diagnoses — 同步跑定性诊断（LLM 调用，常态 10–30s），给长超时。 */
+/** POST /lab/diagnoses — 同步跑定性诊断（推理型端点常态 1–3 分钟，重试场景翻倍），
+ *  超时与 nginx proxy_read_timeout（600s）对齐。 */
 export function createLabDiagnosis(body: CreateDiagnosisRequest): Promise<LabDiagnosis> {
   return unwrap(
-    apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", body, { timeout: 180000 }),
+    apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", body, { timeout: 600000 }),
   );
 }

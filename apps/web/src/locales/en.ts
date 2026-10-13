@@ -295,6 +295,8 @@ export const en: Record<string, string> = {
   // --- API 错误码（envelope code → 模板；缺模板回退后端 message） ---
   "error.validation_error": "Invalid request parameters: {details}",
   "error.internal_error": "Internal server error",
+  "error.timeout":
+    "Request timed out — the server may still be generating (diagnosis usually takes 1–3 min). Refresh shortly to check the result.",
   "error.merge_guard_blocked": "Merge blocked by the guard: {detail}",
   "error.merge_self": "Cannot merge a creative with itself (source and target are the same)",
   "error.creative_not_found": "Creative not found: {id}",
@@ -549,7 +551,7 @@ export const en: Record<string, string> = {
   "lab.report.readyDesc":
     "Runs a synchronous LLM call over observation + product facts + the controlled taxonomy to produce the six-element qualitative report.",
   "lab.report.generate": "Generate qualitative report",
-  "lab.report.generating": "Diagnosing — usually 10–30s…",
+  "lab.report.generating": "Diagnosing — usually 1–3 min (reasoning models think before they answer, please wait)…",
   "lab.report.rerun": "Re-run diagnosis",
   "lab.report.goSettings": "Configure in Settings →",
   "lab.report.stale":

@@ -1,3 +1,4 @@
+import { AxiosError } from "axios";
 import type { AiTestResult } from "@shared";
 import { apiErrorCode, apiErrorParams } from "../services/client";
 import { getLang } from "./i18n";
@@ -16,6 +17,11 @@ function formatLimitBytes(value: unknown): string {
  */
 export function apiErrorText(error: unknown, t: (key: string) => string): string {
   const fallback = error instanceof Error ? error.message : "";
+  // axios 客户端超时（无响应体可解析）→ 本地化提示，替代 "timeout of Nms exceeded"。
+  if (error instanceof AxiosError && error.code === "ECONNABORTED") {
+    const template = t("error.timeout");
+    if (template !== "error.timeout") return template;
+  }
   const code = apiErrorCode(error);
   if (!code) return fallback;
   const key = `error.${code}`;

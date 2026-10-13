@@ -289,6 +289,7 @@ export const zh: Record<string, string> = {
   // --- API 错误码（envelope code → 模板；缺模板回退后端 message） ---
   "error.validation_error": "请求参数错误：{details}",
   "error.internal_error": "服务器内部错误",
+  "error.timeout": "请求超时：服务端可能仍在生成（诊断通常 1–3 分钟），可稍后刷新页面查看结果。",
   "error.merge_guard_blocked": "合并被守卫拦截：{detail}",
   "error.merge_self": "不能与自身合并（source 与 target 相同）",
   "error.creative_not_found": "Creative 不存在：{id}",
@@ -530,7 +531,7 @@ export const zh: Record<string, string> = {
   "lab.report.readyTitle": "观察层就绪",
   "lab.report.readyDesc": "基于观察层 + 产品事实 + 受控词表，同步调用 LLM 生成六要素定性报告。",
   "lab.report.generate": "生成定性报告",
-  "lab.report.generating": "正在诊断，约 10–30 秒…",
+  "lab.report.generating": "正在诊断，通常需要 1–3 分钟（推理模型会先思考再输出，请耐心等待）…",
   "lab.report.rerun": "重新诊断",
   "lab.report.goSettings": "去 Settings 配置 →",
   "lab.report.stale": "词表 / prompt 已升级，当前报告基于旧版本——可重新诊断获得新版本结论。",

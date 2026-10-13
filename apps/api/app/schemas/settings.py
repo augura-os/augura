@@ -46,6 +46,17 @@ class SettingsInfo(BaseModel):
     product_facts: dict[str, object] = {}
 
 
+class ProductFactsImportResult(BaseModel):
+    """POST /settings/product-facts/import：产品资料文件的解析结果（不落库）。"""
+
+    # LLM 抽取出的产品事实（固定六键，缺省为空值）
+    product_facts: dict[str, object] = {}
+    # 抽取文本字符数（截断前）
+    extracted_chars: int
+    # 抽取文本超过上限被截断
+    truncated: bool
+
+
 class AiModelsInfo(BaseModel):
     """GET /settings/ai/models：端点可用的模型 id 列表。"""
 

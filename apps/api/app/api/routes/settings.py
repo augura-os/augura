@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 
 from app.api.deps import DbDep, SettingsDep
 from app.exceptions import ApiError
@@ -16,9 +17,11 @@ from app.schemas.settings import (
     AiModelsInfo,
     AiTestRequest,
     AiTestResult,
+    ProductFactsImportResult,
     SettingsInfo,
     SettingsUpdate,
 )
+from app.services import product_facts_import
 from app.services.embedding import (
     EMBEDDING_BACKEND_SETTING,
     EMBEDDING_BACKENDS,
@@ -377,4 +380,27 @@ def test_ai_connection(
             code=result.code,
             params=result.params or {},
         )
+    )
+
+
+@router.post(
+    "/settings/product-facts/import", response_model=Envelope[ProductFactsImportResult]
+)
+def import_product_facts_file(
+    db: DbDep,
+    settings: SettingsDep,
+    file: Annotated[UploadFile, File(...)],
+) -> Envelope[ProductFactsImportResult]:
+    """上传产品资料文件（md/txt/docx/pdf ≤5MB），LLM 解析为 product_facts。
+
+    不落库：返回结果由前端回填表单，用户检查后走正常 PUT /settings 保存。
+    """
+    outcome = product_facts_import.import_product_facts(db, settings, file)
+    return ok(
+        ProductFactsImportResult(
+            product_facts=outcome.product_facts,
+            extracted_chars=outcome.extracted_chars,
+            truncated=outcome.truncated,
+        ),
+        message="解析完成",
     )

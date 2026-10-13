@@ -20,7 +20,7 @@ from typing import Any, Final
 
 from app.services import lab_taxonomy as tax
 
-LAB_PROMPT_VERSION: Final = "lab-v0.1.0"
+LAB_PROMPT_VERSION: Final = "lab-v0.1.1"
 
 
 def _enum(rows: Any, *extra: str) -> list[str]:
@@ -283,6 +283,8 @@ def diagnosis_system() -> str:
             "一律 reference_only，并在 verdict 中明示「未验证的测试假设」。",
             "7. 输出严格 JSON，结构以 user message 中的 schema 为准，"
             "不输出 schema 之外的字段。",
+            "8. 输出语言：除枚举 id 外，全部字段一律使用简体中文，不夹杂英文"
+            "（专有名词/品牌名/外文原词引用除外）。",
         ]
     )
 

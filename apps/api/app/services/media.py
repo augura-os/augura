@@ -15,8 +15,8 @@ from app.config import Settings
 from app.models import CreativeAsset
 from app.services.storage import StorageService
 
-# Scene-change extraction (adopted from den-creative-framework):
-# detect real cut points instead of fixed first/middle/last sampling.
+# Scene-change extraction: detect real cut points instead of fixed
+# first/middle/last sampling.
 SCENE_THRESHOLD = 0.23
 SMART_FRAME_COUNT = 8
 CONTACT_SHEET_COLS = 4

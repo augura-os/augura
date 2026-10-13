@@ -113,23 +113,27 @@ Project、Creative、CreativeVariant、CreativeAsset、Performance、Tag、TagAs
 
 `DATABASE_URL`、`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`、`MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_BUCKET`、`OPENAI_API_KEY`、`UPLOAD_DIR`（默认 /app/uploads，用于 ffmpeg 临时帧）。
 
-## 9. 前端页面（仅 5 个，React Router）
+## 9. 前端页面（MVP 基线 5 个，React Router）
+
+> 注（2026-10）：本节为 MVP 基线契约。后续里程碑新增了 review / derivations / dnas / creatives / lab 等页面，§11「超出 §9 的页面」指 MVP 阶段的非目标约束；系统首页自 Creative Lab（M1）起改为 `/lab`，图谱迁至 `/graph`。
 
 | 路由 | 页面 | 说明 |
 | --- | --- | --- |
-| `/` | Creative Graph | **系统首页**。React Flow 渲染 `/graph`。点击节点，右侧面板显示 Performance / Tags / Composition / Variant。支持选中两个 Creative 后 merge；选中 Variant 后 split。 |
+| `/` | （重定向） | 重定向到 `/lab`。 |
+| `/lab` | Creative Lab | **系统首页**（2026-10 起）。竞品参考上传（打 `competitor-reference` 标签）→ 受众 → 素材定性报告（LLM 诊断，受控词表 `apps/api/app/services/lab_taxonomy.py`，prompt 资产 `lab_prompts.py`）；方向卡 / Brief 属后续里程碑。 |
+| `/graph` | Creative Graph | 原 `/` 首页，2026-10 起迁至 `/graph`。React Flow 渲染 `/graph`。点击节点，右侧面板显示 Performance / Tags / Composition / Variant。支持选中两个 Creative 后 merge；选中 Variant 后 split。 |
 | `/upload` | Upload | 拖拽上传（mp4/mov/png/jpg/xlsx/xls），POST `/upload`，显示上传进度与结果。 |
 | `/assets` | Asset List | 表格：缩略图、文件名、上传时间、AI 分析状态、Creative 名称；搜索框（`?search=`）。行点击进入详情。 |
 | `/assets/:id` | Asset Detail | 左侧视频播放器（`/assets/{id}/media`）；右侧 AI 分析结果表单：Hook/Conflict/Gameplay/Reward/Character/Environment/Tags/Summary，可编辑，点击保存 PUT `/assets/{id}`。 |
-| `/settings` | Settings | 配置 OpenAI Key（GET/PUT `/settings`）。 |
+| `/settings` | Settings | 配置 OpenAI Key、判定阈值与 product-facts 产品事实（GET/PUT `/settings`）。 |
 
 ### UI 规范
 
 - 风格：Linear / Notion / Vercel 极简。大量留白，白底，细灰边框（`#e5e5e5` 级别），中性色文字，无渐变、无玻璃拟态、无炫酷动画。
-- 左侧窄边栏导航（Graph / Upload / Assets / Settings）。
+- 左侧窄边栏导航（Lab / Graph / Upload / Assets / Settings）。
 - 组件拆分：`components/`（ui 基础件 + 业务组件）、`hooks/`、`services/`（axios 封装）、`stores/`（Zustand）、`pages/`、`lib/`。TypeScript strict，禁止 `any`（确有必要时用 `unknown` 收窄）。
 - 共享类型放 `packages/shared/src/index.ts`（API 信封、Asset、AnalysisResult、Graph DTO 等），web 通过 tsconfig/vite alias `@shared` 引用（相对路径 `../../packages/shared/src`）。
-- `vite.config.ts` 必须：`server.host = true`，proxy 前缀 `^(upload|assets|graph|analysis|settings)` → `http://localhost:8000`；`npm run dev` 为 `vite`（CLI 的 --host/--port 参数可透传）。
+- `vite.config.ts` 必须：`server.host = true`，proxy 前缀 `^(upload|assets|graph|analysis|settings|creatives|review|derivations|dnas|jobs|admin|lab)` → `http://localhost:8000`；`npm run dev` 为 `vite`（CLI 的 --host/--port 参数可透传）。生产反代 `infra/docker/web.nginx.conf` 的正则须与 proxy 前缀保持一致。
 
 ## 10. 验证命令
 

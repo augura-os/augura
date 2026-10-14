@@ -463,6 +463,8 @@ export interface CreateDiagnosisRequest {
   audience?: LabAudience;
   /** 报告输出语言；缺省时前端注入当前界面语言（后端兜底 zh）。 */
   lang?: "zh" | "en";
+  /** false（默认）：幂等/翻译分流；true：忽略缓存全量重跑。 */
+  force_regenerate?: boolean;
 }
 
 /** 观察层（analysis_results 字段照实装配；分析未就绪时整体为 null）。 */
@@ -567,6 +569,8 @@ export interface LabAnalysisResponse {
   diagnosis: LabDiagnosis | null;
   /** 存在旧版本诊断（词表/prompt 已升级，可重新诊断） */
   diagnosis_stale: boolean;
+  /** 另一语言已有当前版本报告——本次诊断可走翻译路径（约 30 秒），否则全量生成 1–3 分钟 */
+  other_lang_available: boolean;
   graph_evidence: LabGraphEvidence | null;
   product_facts: ProductFacts;
 }

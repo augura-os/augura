@@ -10,6 +10,7 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Skeleton } from "../ui/skeleton";
 import { DiagnosisReport } from "./DiagnosisReport";
+import { SnakeLoading } from "./SnakeLoading";
 import type { LabSession } from "./labSession";
 
 interface ReportStepProps {
@@ -30,15 +31,16 @@ export function ReportStep({ session }: ReportStepProps) {
   const { data, isLoading, isError, error } = useLabAnalysis(session.assetId, getLang());
   const diagnosisMutation = useCreateDiagnosis();
 
-  /** 触发诊断（自动/手动共用同一 mutate，body 一致）。仅失败时放行重试——
-   *  成功则保留 key 直到 invalidate 后的 refetch 带回诊断，否则缓存陈旧
-   *  窗口内（含 remount）会重复发起一次昂贵的 LLM 调用。 */
-  const runDiagnosis = () => {
+  /** 触发诊断（自动/手动共用同一 mutate）。force=false 走幂等/翻译分流，
+   *  force=true（手动「重新诊断」）传 force_regenerate 全量重跑。仅失败时放行重试——
+   *  成功则保留 key 直到 invalidate 后的 refetch 带回诊断（见下方 effect），
+   *  否则缓存陈旧窗口内（含 remount）会重复发起一次昂贵的 LLM 调用。 */
+  const runDiagnosis = (force = false) => {
     const key = `${session.assetId}:${getLang()}`;
     if (inflightDiagnoses.has(key)) return;
     inflightDiagnoses.add(key);
     diagnosisMutation.mutate(
-      { asset_id: session.assetId, audience: session.audience },
+      { asset_id: session.assetId, audience: session.audience, force_regenerate: force },
       {
         onSettled: (_diagnosis, mutationError) => {
           if (mutationError) inflightDiagnoses.delete(key);
@@ -46,6 +48,12 @@ export function ReportStep({ session }: ReportStepProps) {
       },
     );
   };
+
+  // 诊断已随 refetch 到达 → 释放 inflight key，手动「重新诊断」才可再次发起
+  const diagnosisArrived = Boolean(data?.diagnosis);
+  useEffect(() => {
+    if (diagnosisArrived) inflightDiagnoses.delete(`${session.assetId}:${getLang()}`);
+  }, [diagnosisArrived, session.assetId]);
 
   // 观察层就绪且无诊断时自动生成一次报告（stale 属于已有诊断，不自动触发，
   // 保持手动「重新诊断」）；失败不自动重试，由错误文案 + 手动按钮兜底。
@@ -58,7 +66,7 @@ export function ReportStep({ session }: ReportStepProps) {
 
   useEffect(() => {
     if (!shouldAutoDiagnose) return;
-    runDiagnosis();
+    runDiagnosis(false);
   }, [shouldAutoDiagnose, runDiagnosis]);
 
   if (isLoading) {
@@ -98,12 +106,8 @@ export function ReportStep({ session }: ReportStepProps) {
     }
     return (
       <Card>
-        <CardContent className="flex items-center gap-3 p-6">
-          <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
-          <div>
-            <p className="text-sm font-medium text-neutral-900">{t("lab.report.analyzing")}</p>
-            <p className="mt-0.5 text-xs text-neutral-500">{t("lab.report.analyzingHint")}</p>
-          </div>
+        <CardContent className="p-4 sm:p-6">
+          <SnakeLoading caption={t("lab.report.analyzing")} hint={t("lab.report.analyzingHint")} />
         </CardContent>
       </Card>
     );
@@ -116,7 +120,7 @@ export function ReportStep({ session }: ReportStepProps) {
 
   const diagnosisActions = (
     <div className="flex flex-wrap items-center gap-3">
-      <Button onClick={runDiagnosis} disabled={diagnosisMutation.isPending}>
+      <Button onClick={() => runDiagnosis(Boolean(diagnosis))} disabled={diagnosisMutation.isPending}>
         {diagnosisMutation.isPending ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : null}
@@ -186,13 +190,23 @@ export function ReportStep({ session }: ReportStepProps) {
           {data.diagnosis_stale ? diagnosisActions : null}
           <DiagnosisReport diagnosis={diagnosis} />
         </>
+      ) : diagnosisMutation.isPending ? (
+        // 生成中全宽面板：贪吃蛇动画 + 二态文案（翻译路径 ~30s / 全量生成 1–3 分钟）
+        <Card>
+          <CardContent className="p-4 sm:p-6">
+            <SnakeLoading
+              caption={
+                data.other_lang_available ? t("lab.report.translating") : t("lab.report.generating")
+              }
+              hint={t("lab.report.generatingHint")}
+            />
+          </CardContent>
+        </Card>
       ) : (
         <Card>
           <CardHeader>
             <CardTitle>{t("lab.report.readyTitle")}</CardTitle>
-            <CardDescription>
-              {diagnosisMutation.isPending ? t("lab.report.generating") : t("lab.report.readyDesc")}
-            </CardDescription>
+            <CardDescription>{t("lab.report.readyDesc")}</CardDescription>
           </CardHeader>
           <CardContent>{diagnosisActions}</CardContent>
         </Card>

@@ -32,7 +32,7 @@ describe("createLabDiagnosis", () => {
     await createLabDiagnosis({ asset_id: "asset-1" });
     expect(mocks.post).toHaveBeenCalledWith(
       "/lab/diagnoses",
-      { asset_id: "asset-1", lang: "zh" },
+      { asset_id: "asset-1", lang: "zh", force_regenerate: false },
       { timeout: 600000 },
     );
   });
@@ -41,7 +41,7 @@ describe("createLabDiagnosis", () => {
     await createLabDiagnosis({ asset_id: "asset-1" });
     expect(mocks.post).toHaveBeenCalledWith(
       "/lab/diagnoses",
-      { asset_id: "asset-1", lang: "en" },
+      { asset_id: "asset-1", lang: "en", force_regenerate: false },
       { timeout: 600000 },
     );
   });
@@ -51,7 +51,7 @@ describe("createLabDiagnosis", () => {
     await createLabDiagnosis({ asset_id: "asset-1", lang: "en" });
     expect(mocks.post).toHaveBeenCalledWith(
       "/lab/diagnoses",
-      { asset_id: "asset-1", lang: "en" },
+      { asset_id: "asset-1", lang: "en", force_regenerate: false },
       { timeout: 600000 },
     );
   });
@@ -60,7 +60,16 @@ describe("createLabDiagnosis", () => {
     await createLabDiagnosis({ asset_id: "asset-1", audience: { gender: "male" } });
     expect(mocks.post).toHaveBeenCalledWith(
       "/lab/diagnoses",
-      { asset_id: "asset-1", audience: { gender: "male" }, lang: "en" },
+      { asset_id: "asset-1", audience: { gender: "male" }, lang: "en", force_regenerate: false },
+      { timeout: 600000 },
+    );
+  });
+
+  it("passes force_regenerate through when the caller asks for a full rerun", async () => {
+    await createLabDiagnosis({ asset_id: "asset-1", force_regenerate: true });
+    expect(mocks.post).toHaveBeenCalledWith(
+      "/lab/diagnoses",
+      { asset_id: "asset-1", lang: "en", force_regenerate: true },
       { timeout: 600000 },
     );
   });

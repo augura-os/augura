@@ -583,6 +583,9 @@ export const en: Record<string, string> = {
     "Runs a synchronous LLM call over observation + product facts + the controlled taxonomy to produce the six-element qualitative report.",
   "lab.report.generate": "Generate qualitative report",
   "lab.report.generating": "Diagnosing — usually 1–3 min (reasoning models think before they answer, please wait)…",
+  "lab.report.generatingHint": "Feel free to switch pages — the report appears here automatically once ready.",
+  "lab.report.translating": "Translating the report… (the other language is ready, ~30 seconds)",
+  "lab.report.snakeScore": "{n} dots eaten",
   "lab.report.rerun": "Re-run diagnosis",
   "lab.report.goSettings": "Configure in Settings →",
   "lab.report.stale":

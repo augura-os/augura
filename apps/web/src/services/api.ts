@@ -351,7 +351,7 @@ export function getLabAnalysis(assetId: string, lang: Lang): Promise<LabAnalysis
  *  超时与 nginx proxy_read_timeout（600s）对齐。
  *  报告语言默认跟随界面语言；调用方显式传 lang 时以调用方为准。 */
 export function createLabDiagnosis(body: CreateDiagnosisRequest): Promise<LabDiagnosis> {
-  const payload: CreateDiagnosisRequest = { lang: getLang(), ...body };
+  const payload: CreateDiagnosisRequest = { lang: getLang(), force_regenerate: false, ...body };
   return unwrap(
     apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", payload, { timeout: 600000 }),
   );

@@ -267,7 +267,10 @@ _RULE8_ZH = (
 )
 _RULE8_EN = (
     "8. Output language: except enum ids, write every field value in English "
-    "(proper nouns / brand names / quoted original terms excepted)."
+    "(proper nouns / brand names / quoted original terms excepted). "
+    "Selling-point names quoted from product-facts must also be rendered in "
+    "English: give a faithful English translation followed by the original "
+    "name in parentheses on first mention, e.g. \"Pirate Defense (抵御海盗)\"."
 )
 
 

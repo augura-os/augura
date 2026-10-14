@@ -24,6 +24,8 @@ class LabDiagnosisRequest(BaseModel):
     audience: AudienceContext | None = None
     # 诊断报告输出语言（仅换 prompt 第 8 条铁律；zh 文案逐字不变）
     lang: Literal["zh", "en"] = "zh"
+    # True = 跳过幂等/翻译分流，强制全量重诊断（覆盖写同键行）
+    force_regenerate: bool = False
 
 
 class LabDiagnosisOut(BaseModel):
@@ -49,5 +51,8 @@ class LabAnalysisView(BaseModel):
     # 请求语言下 latest 诊断存在但 prompt_version 落后于当前版本 = 可重诊断；
     # 该语言无任何行 → diagnosis=None 且 stale=False（前端自动生成）
     diagnosis_stale: bool
+    # 另一语言当前版本报告存在与否：True 时切语言走翻译路径（秒级），
+    # False 时切语言需全量重诊断（前端据此提示耗时差异）
+    other_lang_available: bool
     graph_evidence: dict[str, Any] | None
     product_facts: dict[str, Any]

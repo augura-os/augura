@@ -3,8 +3,11 @@
 - ``POST /lab/references``：与 /upload 同一 ingest 核心，新建 asset 全部
   打 competitor-reference 来源标记（sticky，pipeline 重分析不抹）。
 - ``GET /lab/analysis/{asset_id}?lang=``：观察层 + 当前 prompt 版本该语言
-  诊断 + stale 标记（按语言维度）+ 图证据 + product-facts 的只读视图。
-- ``POST /lab/diagnoses``：同步跑定性诊断并落库（幂等 upsert）。
+  诊断 + stale 标记（按语言维度）+ 另一语言报告可用性 + 图证据 +
+  product-facts 的只读视图。
+- ``POST /lab/diagnoses``：定性诊断落库（幂等 upsert）。默认分流：
+  当前版本该语言已有报告 → 幂等直接返回；另一语言有 → LLM 翻译；
+  都没有 → 全量诊断。``force_regenerate=true`` 跳过分流强制全量重跑。
 """
 
 from __future__ import annotations
@@ -13,9 +16,11 @@ import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, UploadFile
+from sqlalchemy.orm import Session
 
 from app.api.deps import DbDep, SettingsDep, StorageDep
 from app.api.presenters import to_asset_list_item
+from app.config import Settings
 from app.exceptions import ApiError
 from app.models import CreativeDiagnosis
 from app.repositories.analysis import AnalysisRepository
@@ -106,6 +111,11 @@ def get_lab_analysis(
     # 该语言无任何行时 diagnosis=None 且 stale=False（前端自动生成）
     current = diagnosis_repo.get_current(asset.id, LAB_PROMPT_VERSION, lang)
     latest = diagnosis_repo.get_latest(asset.id, lang)
+    other_lang = "en" if lang == "zh" else "zh"
+    other_lang_available = (
+        diagnosis_repo.get_current(asset.id, LAB_PROMPT_VERSION, other_lang)
+        is not None
+    )
     return ok(
         LabAnalysisView(
             asset_id=asset.id,
@@ -119,6 +129,7 @@ def get_lab_analysis(
             diagnosis_stale=(
                 latest is not None and latest.prompt_version != LAB_PROMPT_VERSION
             ),
+            other_lang_available=other_lang_available,
             graph_evidence=(
                 lab_diagnosis.graph_evidence_for(db, analysis)
                 if analysis is not None
@@ -142,13 +153,17 @@ def create_diagnosis(
     payload: LabDiagnosisRequest, db: DbDep, settings: SettingsDep
 ) -> Envelope[LabDiagnosisOut]:
     try:
-        row = lab_diagnosis.run_diagnosis(
-            db,
-            settings,
-            asset_id=payload.asset_id,
-            audience=_audience_dict(payload.audience),
-            lang=payload.lang,
-        )
+        if payload.force_regenerate:
+            # 强制全量重诊断：跳过幂等命中与翻译分流
+            row = lab_diagnosis.run_diagnosis(
+                db,
+                settings,
+                asset_id=payload.asset_id,
+                audience=_audience_dict(payload.audience),
+                lang=payload.lang,
+            )
+        else:
+            row = _diagnose_idempotent(db, settings, payload)
     except lab_diagnosis.LabAssetNotFoundError:
         raise _asset_not_found(payload.asset_id) from None
     except lab_diagnosis.LabObservationNotReadyError as exc:
@@ -159,3 +174,40 @@ def create_diagnosis(
         raise ApiError(502, str(exc), code="lab_diagnosis_invalid_output") from None
     db.commit()
     return ok(_diagnosis_out(row), message="诊断完成")
+
+
+def _diagnose_idempotent(
+    db: Session, settings: Settings, payload: LabDiagnosisRequest
+) -> CreativeDiagnosis:
+    """幂等分流：当前版本该语言已有报告 → 直接返回（不花 LLM）；
+    另一语言有当前版本报告 → 翻译（译文两次未过校验降级全量重诊断）；
+    都没有 → 全量诊断。
+    """
+    repo = CreativeDiagnosisRepository(db)
+    current = repo.get_current(payload.asset_id, LAB_PROMPT_VERSION, payload.lang)
+    if current is not None:
+        return current
+    other_lang = "en" if payload.lang == "zh" else "zh"
+    source = repo.get_current(payload.asset_id, LAB_PROMPT_VERSION, other_lang)
+    if source is not None:
+        try:
+            return lab_diagnosis.run_translation(
+                db,
+                settings,
+                asset_id=payload.asset_id,
+                source_row=source,
+                target_lang=payload.lang,
+            )
+        except lab_diagnosis.TranslationInvalidError:
+            logger.warning(
+                "翻译降级为全量重诊断 asset=%s lang=%s",
+                payload.asset_id,
+                payload.lang,
+            )
+    return lab_diagnosis.run_diagnosis(
+        db,
+        settings,
+        asset_id=payload.asset_id,
+        audience=_audience_dict(payload.audience),
+        lang=payload.lang,
+    )

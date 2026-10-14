@@ -345,6 +345,42 @@ def diagnosis_user(
 
 
 # ---------------------------------------------------------------------------
+# 翻译 prompt（per-lang 报告的低成本跨语言路径）
+# ---------------------------------------------------------------------------
+# 定位：同一素材已有另一语言的当前版本诊断时，切语言 = 翻译而非重跑。
+# 译文行沿用源行 prompt_version（内容血缘不变），audience_context 记
+# translated_from；改本 prompt 不涉及分析口径，无需 bump LAB_PROMPT_VERSION。
+
+_LANG_NAMES: Final = {"zh": "简体中文", "en": "英文"}
+
+
+def translation_system() -> str:
+    return "\n".join(
+        [
+            "你是专业的游戏广告创意本地化译者。任务：把一份广告素材「定性报告」"
+            "JSON 完整翻译为目标语言。",
+            "",
+            "铁律：",
+            "1. JSON 结构完全不变：键名、数组顺序、数字、布尔值原样保留。",
+            "2. 枚举 id 一律原样（钩子 H1–H9、choice 的 正解/作死、"
+            "evidence_label、各 enum 字段等），禁止翻译或改写。",
+            "3. 只翻译自然语言文本值（verdict、summary、各类描述文字）。",
+            "4. 专有名词/品牌名保留原文（如 Rise of Kingdoms），可附通译名。",
+            "5. 忠实翻译，禁止增删信息、禁止重新分析、禁止修正结论。",
+            "6. 输出严格 JSON，不输出任何额外文字或代码块标记。",
+        ]
+    )
+
+
+def translation_user(*, source_lang: str, target_lang: str, report: dict[str, Any]) -> str:
+    return (
+        f"把以下定性报告 JSON 从{_LANG_NAMES.get(source_lang, source_lang)}翻译为"
+        f"{_LANG_NAMES.get(target_lang, target_lang)}，遵守 system 的全部铁律：\n"
+        + json.dumps(report, ensure_ascii=False, indent=2)
+    )
+
+
+# ---------------------------------------------------------------------------
 # M2 预留：方向池 / Brief / S-G 自评审
 # ---------------------------------------------------------------------------
 # 三条 prompt 在 M2 前置评审后落地本文件，契约已在立项规划锁定：

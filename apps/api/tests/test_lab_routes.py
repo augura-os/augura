@@ -321,16 +321,23 @@ class TestDiagnosisLang:
     def test_post_zh_then_en_coexist_and_get_returns_each_lang(
         self, api_client: TestClient, db_session: Session, monkeypatch
     ) -> None:
-        # 同 asset 同 prompt 版本：先 zh 后 en 两行共存，GET 按 lang 各取各的
+        # 同 asset 同 prompt 版本：先 zh 后 en 两行共存，GET 按 lang 各取各的。
+        # en 用 force_regenerate 强制全量重诊断（否则默认走翻译路径）
         asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-lang-both.mp4")
-        _capture_llm(monkeypatch)
+        systems = _capture_llm(monkeypatch)
 
         resp_zh = api_client.post("/lab/diagnoses", json={"asset_id": asset.id})
         resp_en = api_client.post(
-            "/lab/diagnoses", json={"asset_id": asset.id, "lang": "en"}
+            "/lab/diagnoses",
+            json={"asset_id": asset.id, "lang": "en", "force_regenerate": True},
         )
         assert resp_zh.status_code == 200
         assert resp_en.status_code == 200
+
+        # 两次都是全量诊断 prompt（非翻译 prompt）
+        assert len(systems) == 2
+        assert all("创意分析师" in system for system in systems)
+        assert "8. Output language: except enum ids" in systems[1]
 
         repo = CreativeDiagnosisRepository(db_session)
         assert repo.get_current(asset.id, LAB_PROMPT_VERSION, "zh") is not None
@@ -431,3 +438,206 @@ class TestAnalysisViewDiagnosisLang:
         response = api_client.get(f"/lab/analysis/{asset.id}?lang=fr")
         assert response.status_code == 400
         assert response.json()["code"] == "validation_error"
+
+    def test_other_lang_available_true_when_other_lang_current_row_exists(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 有 en 当前版本行：GET zh（无 zh 行）→ True；GET en（无 zh 行）→ False
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m16-view-other-yes.mp4")
+        self._seed_diagnosis(db_session, asset.id, lang="en")
+
+        data_zh = api_client.get(f"/lab/analysis/{asset.id}").json()["data"]
+        assert data_zh["diagnosis"] is None
+        assert data_zh["other_lang_available"] is True
+
+        data_en = api_client.get(f"/lab/analysis/{asset.id}?lang=en").json()["data"]
+        assert data_en["diagnosis"]["lang"] == "en"
+        assert data_en["other_lang_available"] is False
+
+    def test_other_lang_available_false_when_no_other_lang_row(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 只有 zh 行：GET zh → False（en 无行）；en 只有旧版行同样 False
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m16-view-other-no.mp4")
+        self._seed_diagnosis(db_session, asset.id, lang="zh")
+
+        data = api_client.get(f"/lab/analysis/{asset.id}").json()["data"]
+        assert data["diagnosis"]["lang"] == "zh"
+        assert data["other_lang_available"] is False
+
+        legacy = _seed_completed_with_analysis(db_session, "FAKE-m16-view-other-old.mp4")
+        self._seed_diagnosis(
+            db_session, legacy.id, lang="en", prompt_version="lab-v0.0.0-legacy"
+        )
+        data_legacy = api_client.get(f"/lab/analysis/{legacy.id}").json()["data"]
+        assert data_legacy["other_lang_available"] is False
+
+
+def _capture_llm_calls(monkeypatch, response: dict | None = None) -> list[dict]:  # noqa: ANN001, ANN202
+    """mock LLM 并捕获每次调用的 system/user/max_tokens（分流路径断言用）。
+
+    response 指定时原样返回（模拟忠实翻译：结构/枚举 id 不变）。
+    """
+    calls: list[dict] = []
+
+    def _fake(_config, *, system, user, max_tokens, **_kw):  # noqa: ANN001, ANN202
+        calls.append({"system": system, "user": user, "max_tokens": max_tokens})
+        return response if response is not None else _valid_output()
+
+    monkeypatch.setattr(lab_diagnosis, "complete_json", _fake)
+    monkeypatch.setattr(
+        lab_diagnosis,
+        "resolve_ai_config",
+        lambda _db, _s: AIConfig(
+            api_key="sk-fake",
+            base_url="",
+            vision_model="fake-vision-v1",
+            embedding_model="",
+        ),
+    )
+    return calls
+
+
+class TestDiagnosisDispatch:
+    """POST /lab/diagnoses 幂等分流：幂等返回 / 翻译路径 / 强制重跑 / 翻译降级。"""
+
+    def _seed_diagnosis(
+        self,
+        db: Session,
+        asset_id: str,
+        *,
+        lang: str,
+        output: dict | None = None,
+    ):
+        return CreativeDiagnosisRepository(db).upsert(
+            asset_id,
+            prompt_version=LAB_PROMPT_VERSION,
+            lang=lang,
+            observation_snapshot={"summary": "虚构观察层"},
+            output=output if output is not None else _valid_output(),
+            evidence_label="reference_only",
+            engine_version="auto:fake-vision-v1",
+            audience_context={"region": "FAKE", "lang": lang},
+        )
+
+    def test_idempotent_return_when_current_row_exists(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        # 目标语言已有当前版本行 → 直接返回，LLM 零调用
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m16-disp-idem.mp4")
+        existing_output = _valid_output()
+        existing_output["verdict"] = "已落库的旧报告"
+        self._seed_diagnosis(db_session, asset.id, lang="zh", output=existing_output)
+        calls = _capture_llm_calls(monkeypatch)
+
+        response = api_client.post("/lab/diagnoses", json={"asset_id": asset.id})
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["lang"] == "zh"
+        assert data["output"]["verdict"] == "已落库的旧报告"
+        assert calls == []
+
+    def test_force_regenerate_skips_dispatch(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        # 目标语言有行但 force_regenerate=true → 全量重跑（diagnosis prompt）
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m16-disp-force.mp4")
+        existing_output = _valid_output()
+        existing_output["verdict"] = "已落库的旧报告"
+        self._seed_diagnosis(db_session, asset.id, lang="zh", output=existing_output)
+        calls = _capture_llm_calls(monkeypatch)
+
+        response = api_client.post(
+            "/lab/diagnoses",
+            json={"asset_id": asset.id, "force_regenerate": True},
+        )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["output"]["verdict"].startswith("虚构素材")  # 已被新诊断覆盖
+        assert len(calls) == 1
+        assert "创意分析师" in calls[0]["system"]
+        assert "本地化译者" not in calls[0]["system"]
+
+    def test_translation_path_from_other_lang_row(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        # 只有 en 当前版本行 → POST zh 走翻译：LLM 收翻译 prompt + 源 JSON
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m16-disp-trans.mp4")
+        source_output = _valid_output()
+        source_output["content"]["choice_chain"] = [
+            {"beat": "storm hits", "choice": "正解", "feedback": "tower holds"}
+        ]
+        source = self._seed_diagnosis(db_session, asset.id, lang="en", output=source_output)
+        # 忠实翻译 mock：原样返回源报告（结构/枚举 id 不变）
+        calls = _capture_llm_calls(monkeypatch, response=source_output)
+
+        response = api_client.post("/lab/diagnoses", json={"asset_id": asset.id})
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["lang"] == "zh"
+        assert len(calls) == 1
+        # system 是翻译 prompt（不是诊断 prompt）
+        assert "本地化译者" in calls[0]["system"]
+        assert "创意分析师" not in calls[0]["system"]
+        # user 含源报告 JSON（枚举 id 原样出现在输入里）
+        assert '"choice": "正解"' in calls[0]["user"]
+        assert source_output["verdict"] in calls[0]["user"]
+        # 落库 zh 行：血缘沿用源行
+        stored = CreativeDiagnosisRepository(db_session).get_current(
+            asset.id, LAB_PROMPT_VERSION, "zh"
+        )
+        assert stored is not None
+        assert stored.prompt_version == source.prompt_version
+        assert stored.engine_version == source.engine_version
+        assert stored.audience_context == {
+            "region": "FAKE",
+            "lang": "zh",
+            "translated_from": "en",
+        }
+        assert stored.output["content"]["choice_chain"][0]["choice"] == "正解"
+
+    def test_translation_invalid_twice_falls_back_to_full_diagnosis(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        # 译文两次未过校验 → 记 warning 降级全量生成（最终走 diagnosis prompt）
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m16-disp-fallback.mp4")
+        self._seed_diagnosis(db_session, asset.id, lang="en")
+        calls: list[dict] = []
+
+        def _fake(_config, *, system, user, max_tokens, **_kw):  # noqa: ANN001, ANN202
+            calls.append({"system": system, "user": user})
+            if "本地化译者" in system:
+                return {"verdict": "残缺译文"}  # 翻译两次都不合法
+            return _valid_output()
+
+        monkeypatch.setattr(lab_diagnosis, "complete_json", _fake)
+        monkeypatch.setattr(
+            lab_diagnosis,
+            "resolve_ai_config",
+            lambda _db, _s: AIConfig(
+                api_key="sk-fake",
+                base_url="",
+                vision_model="fake-vision-v1",
+                embedding_model="",
+            ),
+        )
+
+        response = api_client.post("/lab/diagnoses", json={"asset_id": asset.id})
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["lang"] == "zh"
+        assert data["output"]["verdict"].startswith("虚构素材")
+        # 翻译 ×2（均非法）+ 全量诊断 ×1
+        assert len(calls) == 3
+        assert "本地化译者" in calls[0]["system"]
+        assert "本地化译者" in calls[1]["system"]
+        assert "创意分析师" in calls[2]["system"]
+        stored = CreativeDiagnosisRepository(db_session).get_current(
+            asset.id, LAB_PROMPT_VERSION, "zh"
+        )
+        assert stored is not None
+        assert stored.audience_context == {"lang": "zh"}  # 全量路径，无 translated_from

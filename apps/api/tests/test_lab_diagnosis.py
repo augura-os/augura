@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import AnalysisResult, CreativeAsset
+from app.models import AnalysisResult, CreativeAsset, CreativeDiagnosis
 from app.repositories.creative_diagnoses import CreativeDiagnosisRepository
 from app.services import lab_diagnosis
 from app.services.lab_prompts import LAB_PROMPT_VERSION
@@ -402,3 +402,107 @@ class TestPreconditions:
                 db_session, Settings(), asset_id=asset.id, audience=None
             )
         assert "Settings" in str(excinfo.value)
+
+
+class TestRunTranslation:
+    """run_translation：另一语言当前版本报告 → 译文行（血缘沿用源行）。"""
+
+    def _seed_source(
+        self, db: Session, asset_id: str, *, lang: str = "en"
+    ) -> CreativeDiagnosis:
+        source_output = _valid_output()
+        source_output["content"]["choice_chain"] = [
+            {"beat": "fleet ambushed", "choice": "正解", "feedback": "guns win"}
+        ]
+        return CreativeDiagnosisRepository(db).upsert(
+            asset_id,
+            prompt_version=LAB_PROMPT_VERSION,
+            lang=lang,
+            observation_snapshot={"summary": "虚构观察层：舰队重建素材"},
+            product_facts_snapshot={"selling_points": ["虚构卖点"]},
+            audience_context={"region": "FAKE", "lang": lang},
+            output=source_output,
+            evidence_label="reference_only",
+            engine_version="auto:fake-vision-v1",
+        )
+
+    def test_persists_translation_with_source_lineage(
+        self, db_session: Session, monkeypatch, llm_mocks: list
+    ) -> None:
+        asset = _seed_analyzed_asset(db_session, "FAKE-m16-trans-ok.mp4")
+        source = self._seed_source(db_session, asset.id)
+
+        # 忠实翻译 mock：原样返回源报告（结构/枚举 id 不变）
+        def _fake_translate(config, *, system, user, max_tokens, **_kw):  # noqa: ANN001, ANN202
+            llm_mocks.append(
+                {"system": system, "user": user, "max_tokens": max_tokens}
+            )
+            return source.output
+
+        monkeypatch.setattr(lab_diagnosis, "complete_json", _fake_translate)
+
+        row = lab_diagnosis.run_translation(
+            db_session,
+            Settings(),
+            asset_id=asset.id,
+            source_row=source,
+            target_lang="zh",
+        )
+
+        assert row.lang == "zh"
+        # 血缘不变：prompt_version / 输入快照 / 引擎全部沿用源行
+        assert row.prompt_version == source.prompt_version
+        assert row.observation_snapshot == source.observation_snapshot
+        assert row.product_facts_snapshot == source.product_facts_snapshot
+        assert row.engine_version == source.engine_version
+        # 受众快照：剥掉源 lang，并入目标 lang + translated_from
+        assert row.audience_context == {
+            "region": "FAKE",
+            "lang": "zh",
+            "translated_from": "en",
+        }
+        # 枚举 id 原样（choice 的 正解 不译）
+        assert row.output["content"]["choice_chain"][0]["choice"] == "正解"
+        assert row.evidence_label == "reference_only"
+        # LLM 收到的是翻译 prompt：system 是翻译铁律，user 含源报告 JSON
+        assert len(llm_mocks) == 1
+        assert "本地化译者" in llm_mocks[0]["system"]
+        assert "创意分析师" not in llm_mocks[0]["system"]
+        assert llm_mocks[0]["max_tokens"] == lab_diagnosis.DIAGNOSIS_MAX_TOKENS
+        assert '"choice": "正解"' in llm_mocks[0]["user"]
+        assert source.output["verdict"] in llm_mocks[0]["user"]
+        # 落库可读回
+        stored = CreativeDiagnosisRepository(db_session).get_current(
+            asset.id, LAB_PROMPT_VERSION, "zh"
+        )
+        assert stored is not None and stored.id == row.id
+
+    def test_invalid_twice_raises_and_writes_nothing(
+        self, db_session: Session, monkeypatch, llm_mocks: list
+    ) -> None:
+        asset = _seed_analyzed_asset(db_session, "FAKE-m16-trans-fail.mp4")
+        source = self._seed_source(db_session, asset.id)
+        calls: list[None] = []
+
+        def _always_invalid(*_a, **_k) -> dict:  # noqa: ANN202
+            calls.append(None)
+            return {"verdict": "残缺译文"}
+
+        monkeypatch.setattr(lab_diagnosis, "complete_json", _always_invalid)
+
+        with pytest.raises(lab_diagnosis.TranslationInvalidError):
+            lab_diagnosis.run_translation(
+                db_session,
+                Settings(),
+                asset_id=asset.id,
+                source_row=source,
+                target_lang="zh",
+            )
+
+        assert len(calls) == 2  # 首次 + 重试一次
+        assert (
+            CreativeDiagnosisRepository(db_session).get_current(
+                asset.id, LAB_PROMPT_VERSION, "zh"
+            )
+            is None
+        )

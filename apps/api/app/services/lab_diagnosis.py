@@ -6,6 +6,12 @@ lab_validate 校验（非法输出重试一次，仍非法则抛错不写库）�
 evidence_label 服务端钳制 → creative_diagnoses 按
 (asset_id, prompt_version, lang) 幂等 upsert。
 
+切语言低成本路径（run_translation）：另一语言已有当前版本报告时，
+LLM 只译自然语言文本值（lab_prompts 翻译 prompt），结构/枚举 id
+原样；译文行沿用源行 prompt_version（内容血缘不变），
+audience_context 记 translated_from。译文两次未过校验抛
+TranslationInvalidError，由路由层降级全量重诊断。
+
 业务异常由路由层映状态码：asset 缺失 404 / 观察层未就绪 409 /
 AI key 未配置 409 / 诊断生成失败 502。
 """
@@ -29,6 +35,8 @@ from app.services.lab_prompts import (
     LAB_PROMPT_VERSION,
     diagnosis_system,
     diagnosis_user,
+    translation_system,
+    translation_user,
 )
 from app.services.lab_validate import validate
 from app.services.llm_judge import complete_json
@@ -60,6 +68,10 @@ class LabAIKeyMissingError(RuntimeError):
 
 class LabDiagnosisFailedError(RuntimeError):
     """诊断生成失败：两次输出均未过 schema 校验（路由层映 502，不写库）。"""
+
+
+class TranslationInvalidError(RuntimeError):
+    """译文两次均未过 schema 校验（路由层记 warning 后降级全量重诊断）。"""
 
 
 def observation_from_analysis(analysis: AnalysisResult) -> dict[str, Any]:
@@ -194,4 +206,85 @@ def run_diagnosis(
         output=output,
         evidence_label=str(output["evidence_label"]),
         engine_version=f"auto:{config.vision_model}",
+    )
+
+
+def run_translation(
+    db: Session,
+    settings: Settings,
+    *,
+    asset_id: str,
+    source_row: CreativeDiagnosis,
+    target_lang: str,
+) -> CreativeDiagnosis:
+    """把 source_row（另一语言当前版本诊断）翻译为 target_lang 并落库。
+
+    译文行沿用源行 prompt_version（内容血缘不变）、observation /
+    product_facts 快照照抄；audience_context 剥掉源 lang 后并入
+    {"lang": target_lang, "translated_from": source_row.lang}。
+    翻译不重做 evidence_label 钳制——译文枚举 id 原样，与源行一致。
+    返回落库行（flush，不 commit）；译文两次未过校验抛
+    TranslationInvalidError（不写库），由路由层降级全量重诊断。
+    """
+    config = resolve_ai_config(db, settings)
+    if not config.api_key:
+        raise LabAIKeyMissingError(
+            "AI API Key 未配置：请在 Settings 页面填写"
+            "（支持 OpenAI / Kimi 等 OpenAI 兼容接口），"
+            "或设置环境变量 OPENAI_API_KEY 后重试"
+        )
+
+    user_prompt = translation_user(
+        source_lang=source_row.lang,
+        target_lang=target_lang,
+        report=source_row.output,
+    )
+
+    # 与 run_diagnosis 同一重试策略：非法输出（无返回 / schema 校验不过）
+    # 重试一次；仍失败抛 TranslationInvalidError，不写库
+    output: dict[str, Any] | None = None
+    last_errors: list[str] = []
+    for _attempt in range(2):
+        candidate = complete_json(
+            config,
+            system=translation_system(),
+            user=user_prompt,
+            max_tokens=DIAGNOSIS_MAX_TOKENS,
+        )
+        if candidate is None:
+            last_errors = ["LLM 未返回可用 JSON"]
+            continue
+        errors = validate(candidate, DIAGNOSIS_SCHEMA)
+        if not errors:
+            output = candidate
+            break
+        last_errors = errors
+    if output is None:
+        logger.warning(
+            "翻译输出两次均未通过校验 asset=%s %s→%s errors=%s",
+            asset_id,
+            source_row.lang,
+            target_lang,
+            last_errors,
+        )
+        raise TranslationInvalidError(
+            "诊断翻译失败：模型两次输出均未通过 schema 校验"
+            f"（{'; '.join(last_errors[:3])}）"
+        )
+
+    return CreativeDiagnosisRepository(db).upsert(
+        asset_id,
+        prompt_version=source_row.prompt_version,
+        lang=target_lang,
+        observation_snapshot=source_row.observation_snapshot,
+        product_facts_snapshot=source_row.product_facts_snapshot,
+        audience_context={
+            key: value
+            for key, value in (source_row.audience_context or {}).items()
+            if key != "lang"
+        }
+        | {"lang": target_lang, "translated_from": source_row.lang},
+        output=output,
+        evidence_label=str(output["evidence_label"]),
+        engine_version=source_row.engine_version,
     )

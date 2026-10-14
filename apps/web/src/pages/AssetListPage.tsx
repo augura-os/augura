@@ -126,7 +126,7 @@ export default function AssetListPage() {
                 <TableHead className="w-[72px]">{t("assets.list.colPreview")}</TableHead>
                 <TableHead>{t("assets.list.colFilename")}</TableHead>
                 <TableHead className="w-[180px]">{t("assets.list.colUploaded")}</TableHead>
-                <TableHead className="w-[170px]">{t("assets.list.colAiStatus")}</TableHead>
+                <TableHead className="w-[220px]">{t("assets.list.colAiStatus")}</TableHead>
                 <TableHead>{t("assets.list.colCreative")}</TableHead>
               </TableRow>
             </TableHeader>

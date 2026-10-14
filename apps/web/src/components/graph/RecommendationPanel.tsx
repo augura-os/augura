@@ -104,7 +104,7 @@ function ItemCard({
           className="min-w-0 flex-1 text-left"
           title={tooltip}
         >
-          <span className="flex items-center gap-1.5">
+          <span className="flex flex-wrap items-center gap-1.5">
             <span
               className={cn(
                 "shrink-0 rounded px-1 py-px text-[10px] font-semibold",

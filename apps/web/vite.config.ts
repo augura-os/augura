@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "node:url";
 
-// Contract §3/§9: dev proxy forwards ^(upload|assets|graph|analysis|settings|creatives)
+// Contract §3/§9: dev proxy forwards ^(upload|assets|graph|analysis|settings|creatives|lab|…)
 // to the local FastAPI backend. Frontend code must use relative paths only.
 export default defineConfig({
   plugins: [react()],
@@ -18,7 +18,7 @@ export default defineConfig({
     host: true,
     port: 3000,
     proxy: {
-      "^/(upload|assets|graph|analysis|settings|creatives|review|derivations|dnas|jobs|admin)": {
+      "^/(upload|assets|graph|analysis|settings|creatives|review|derivations|dnas|jobs|admin|lab)": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },

@@ -25,18 +25,30 @@ import threading
 import uuid
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
-from app.models import AnalysisResult, Creative, CreativeAsset
+from app.models import (
+    AnalysisResult,
+    Creative,
+    CreativeAsset,
+    CreativeVariant,
+    Tag,
+    TagAssignment,
+)
 from app.repositories.analysis import AnalysisRepository
 from app.repositories.assets import AssetRepository
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import rebuild_mirror
 from app.repositories.jobs import JobRepository
-from app.repositories.tags import TagRepository
+from app.repositories.tags import (
+    COMPETITOR_REFERENCE_TAG,
+    TagRepository,
+    preserve_sticky_tags,
+)
 from app.schemas.analysis import AnalysisPayload
 from app.services import graph_sync
 from app.services.analysis import AnalysisService
@@ -185,6 +197,19 @@ def _measure_candidates(
     return results
 
 
+def _competitor_creative_ids(db: Session) -> set[str]:
+    """包含任一竞品参考 variant 的 creative_id 集合（一条 SQL，不逐族 N+1）。"""
+    return {
+        row[0]
+        for row in db.execute(
+            select(CreativeVariant.creative_id)
+            .join(TagAssignment, TagAssignment.asset_id == CreativeVariant.asset_id)
+            .join(Tag, TagAssignment.tag_id == Tag.id)
+            .where(Tag.name == COMPETITOR_REFERENCE_TAG)
+        ).all()
+    }
+
+
 def _cluster(
     db: Session,
     asset: CreativeAsset,
@@ -225,6 +250,20 @@ def _cluster(
         previous_creative_id = variant.creative_id
 
     creatives = creative_repo.list_all()
+    # 竞品参考隔离（Creative Lab）：带 sticky 来源标的 asset 永远独立成族，
+    # 不参与匹配（跳过召回直接新建）；自有 asset 的候选族排除含竞品参考
+    # variant 的家族。两个方向都切断，竞品与自有素材在 Creative 层互不污染
+    # （时序保证：sticky 标签在 /lab/references 请求内写入，先于 worker
+    # 异步执行本管线；重分析由 _set_tags_preserving_sources 保留该标签）。
+    tag_names = {tag.name for tag in TagRepository(db).get_asset_tags(asset.id)}
+    if COMPETITOR_REFERENCE_TAG in tag_names:
+        creatives = []
+    else:
+        competitor_creative_ids = _competitor_creative_ids(db)
+        if competitor_creative_ids:
+            creatives = [
+                c for c in creatives if c.id not in competitor_creative_ids
+            ]
     # shadow 默认（设计 §3.2，E0 拍板）：attach 判定永远走文本通道——
     # embedding 只写入存储（representative/variant/analysis 三处），
     # 不接管判定；向量召回通道在 E2 接 missed_merge_scan 候选并集。
@@ -402,6 +441,21 @@ def _payload_from_result(result: AnalysisResult) -> AnalysisPayload:
     )
 
 
+def _set_tags_preserving_sources(
+    db: Session, asset_id: str, incoming: list[str]
+) -> list[Tag]:
+    """pipeline 自动打标签（replace 语义），但不抹 sticky 来源标记。
+
+    AI 每次重分析都用 payload.tags 整体替换；competitor-reference 这类
+    人工/入口赋予的来源标签必须留存（见 repositories/tags.STICKY_SOURCE_TAGS）。
+    """
+    tag_repo = TagRepository(db)
+    existing_names = [tag.name for tag in tag_repo.get_asset_tags(asset_id)]
+    return tag_repo.set_asset_tags(
+        asset_id, preserve_sticky_tags(existing_names, incoming)
+    )
+
+
 def _redownload_for_measure(
     storage: StorageService, asset: CreativeAsset, tmp_dir: Path
 ) -> str | None:
@@ -473,7 +527,7 @@ def _run_analysis_pipeline(
             # 向量是上次分析产出的——provenance 戳沿用 analysis 行上的原戳
             # （迁移前的存量行为 None = 未知模型，语义正确）
             embedding_model = existing.embedding_model
-            tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
+            tags = _set_tags_preserving_sources(db, asset.id, payload.tags)
             if asset.file_type == "video":
                 local_video = _redownload_for_measure(storage, asset, tmp_dir)
         else:
@@ -487,7 +541,7 @@ def _run_analysis_pipeline(
             analysis = analysis_repo.upsert(
                 asset.id, payload, engine_version=engine_version
             )
-            tags = TagRepository(db).set_asset_tags(asset.id, payload.tags)
+            tags = _set_tags_preserving_sources(db, asset.id, payload.tags)
 
             # Embedding 只写入（shadow）：抽象层按 embedding_backend 分发
             # （off/provider/local），失败降级 None——attach 判定恒走文本通道。

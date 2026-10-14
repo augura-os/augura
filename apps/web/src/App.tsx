@@ -1,8 +1,9 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { LanguageProvider } from "./lib/i18n";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ConsentDialog, useConsentGiven } from "./components/privacy/ConsentDialog";
 import { OnboardingDialog } from "./components/onboarding/OnboardingDialog";
+import LabPage from "./pages/LabPage";
 import CreativeGraphPage from "./pages/CreativeGraphPage";
 import UploadPage from "./pages/UploadPage";
 import AssetListPage from "./pages/AssetListPage";
@@ -18,7 +19,9 @@ export default function App() {
         {consentGiven ? <OnboardingDialog /> : null}
         <Routes>
           <Route element={<AppLayout />}>
-            <Route path="/" element={<CreativeGraphPage />} />
+            <Route path="/" element={<Navigate to="/lab" replace />} />
+            <Route path="/lab" element={<LabPage />} />
+            <Route path="/graph" element={<CreativeGraphPage />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/assets" element={<AssetListPage />} />
             <Route path="/assets/:id" element={<AssetDetailPage />} />

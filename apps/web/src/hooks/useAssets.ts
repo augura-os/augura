@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchAssets, retryAnalysisJob } from "../services/api";
+import { deleteAsset, fetchAssets, retryAnalysisJob } from "../services/api";
 
 /**
  * Asset list with search. Polls every ~4s while any row is still
@@ -25,6 +25,17 @@ export function useRetryAnalysisJob() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (assetId: string) => retryAnalysisJob(assetId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["assets"] });
+    },
+  });
+}
+
+/** 删除素材（DELETE /assets/{id}），成功后列表失效重拉。 */
+export function useDeleteAsset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (assetId: string) => deleteAsset(assetId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["assets"] });
     },

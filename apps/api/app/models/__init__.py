@@ -3,6 +3,7 @@
 from app.models.asset import AnalysisResult, CreativeAsset, Performance
 from app.models.base import Base, TimestampMixin, new_uuid
 from app.models.creative import Creative, CreativeVariant
+from app.models.creative_diagnosis import CreativeDiagnosis
 from app.models.derivation import VariantDerivation
 from app.models.dna import CreativeDNA
 from app.models.edit_log import EditLog
@@ -22,6 +23,7 @@ __all__ = [
     "Creative",
     "CreativeAsset",
     "CreativeDNA",
+    "CreativeDiagnosis",
     "CreativeVariant",
     "EditLog",
     "GraphEdge",

@@ -26,6 +26,7 @@ from app.api.routes import (
     dnas,
     graph,
     jobs,
+    lab,
     review,
     settings,
     upload,
@@ -151,3 +152,4 @@ app.include_router(derivations.router)
 app.include_router(dnas.router)
 app.include_router(jobs.router)
 app.include_router(admin.router)
+app.include_router(lab.router)

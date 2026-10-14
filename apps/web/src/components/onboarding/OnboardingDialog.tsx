@@ -65,12 +65,12 @@ export function OnboardingDialog() {
           <p>{t("onboarding.stepsTitle")}</p>
           <p>
             {t("onboarding.step1a")}
-            <span className="font-medium text-neutral-900">Settings</span>
+            <span className="font-medium text-neutral-900">{t("nav.settings")}</span>
             {t("onboarding.step1b")}
           </p>
           <p>
             {t("onboarding.step2a")}
-            <span className="font-medium text-neutral-900">Upload</span>
+            <span className="font-medium text-neutral-900">{t("nav.upload")}</span>
             {t("onboarding.step2b")}
             <span className="font-medium text-neutral-900">{t("onboarding.facebookReport")}</span>
             {t("onboarding.step2c")}

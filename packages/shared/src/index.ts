@@ -416,6 +416,208 @@ export interface GraphResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Creative Lab (M1) — 竞品参考拆解：观察层 / 六要素定性诊断 / 产品事实
+// ---------------------------------------------------------------------------
+
+/**
+ * 产品事实（settings 键 product_facts）：诊断 prompt 注入用。
+ * 键全可选，缺键 = 该项未配置；诊断对缺失项列清单而非编造。
+ */
+export interface ProductFacts {
+  /** 一句话核心循环 */
+  core_loop?: string;
+  /** 卖点清单（有序，诊断的卖点映射候选只能从这里取） */
+  selling_points?: string[];
+  /** 必展示元素 */
+  must_show?: string[];
+  /** 禁止表达 */
+  forbidden_claims?: string[];
+  /** 合规限制 */
+  compliance_limits?: string[];
+  /** 成功指标口径定义 */
+  success_metric_defs?: string[];
+}
+
+/** POST /settings/product-facts/import 返回：产品资料文件的 LLM 解析结果。
+ *  不落库——前端回填表单、用户检查后走 PUT /settings 保存。 */
+export interface ProductFactsImportResult {
+  /** 抽取出的产品事实（固定六键，资料未覆盖的键为空值） */
+  product_facts: ProductFacts;
+  /** 抽取文本字符数（截断前） */
+  extracted_chars: number;
+  /** 资料过长，抽取文本被截断 */
+  truncated: boolean;
+}
+
+/** 诊断受众上下文（全可选 string；全空按未提供处理）。 */
+export interface LabAudience {
+  gender?: string;
+  age?: string;
+  region?: string;
+  category?: string;
+}
+
+/** POST /lab/diagnoses body. */
+export interface CreateDiagnosisRequest {
+  asset_id: string;
+  audience?: LabAudience;
+  /** 报告输出语言；缺省时前端注入当前界面语言（后端兜底 zh）。 */
+  lang?: "zh" | "en";
+  /** false（默认）：幂等/翻译分流；true：忽略缓存全量重跑。 */
+  force_regenerate?: boolean;
+}
+
+/** 观察层（analysis_results 字段照实装配；分析未就绪时整体为 null）。 */
+export interface LabObservation {
+  summary: string | null;
+  hook: string | null;
+  conflict: string | null;
+  gameplay: string | null;
+  reward: string | null;
+  characters: string[] | null;
+  environment: string[] | null;
+  emotion: string[] | null;
+  tags: string[] | null;
+  variant_factors: string[] | null;
+  creative_name: string | null;
+}
+
+/** 词表缺口候选：AI 判不出受控词表枚举值时提名的新词。
+ *  诊断 output 内嵌为本次素材的候选；/lab/vocab-gaps 聚合为跨素材复现视图。 */
+export interface LabVocabGap {
+  /** 所属受控词表字段（词表组名，如 hook_mechanism / form_tag） */
+  field: string;
+  /** AI 提名的新词 id */
+  proposal: string;
+  /** 提名理由 */
+  rationale: string;
+}
+
+/** GET /lab/vocab-gaps 单条：跨素材聚合的缺口候选（count 降序）。 */
+export interface LabVocabGapItem extends LabVocabGap {
+  /** 提名该候选的素材数 */
+  count: number;
+  /** 最近出现的素材（前端链到素材详情） */
+  recent_assets: Array<{ asset_id: string; filename: string }>;
+}
+
+/** GET /lab/vocab-gaps payload。 */
+export interface LabVocabGapsResponse {
+  items: LabVocabGapItem[];
+  /** 复现素材数达到该值的候选标记「建议准入」（前端徽标警示色 + 标记） */
+  suggest_threshold: number;
+}
+
+/** GET /lab/references 单条：已上传竞品参考（AssetListItem 字段）
+ *  + 诊断报告语言状态；列表按 created_at 倒序。 */
+export interface LabReferenceItem extends AssetListItem {
+  /** 当前 prompt 版本已有的报告语言（如 ["zh"]）；非空 = 可直接打开报告 */
+  diagnosis_current_langs: string[];
+  /** 旧版本（stale）报告语言——词表/prompt 升级前的存量报告 */
+  diagnosis_stale_langs: string[];
+}
+
+/** GET /lab/references payload。 */
+export interface LabReferenceListOut {
+  items: LabReferenceItem[];
+}
+
+/** 六要素定性诊断输出（结构以后端 lab_prompts.DIAGNOSIS_SCHEMA 为准；
+ *  枚举字段为受控词表 id，前端 lab.enum.* 映射展示名）。 */
+export interface LabDiagnosisOutput {
+  /** 一句话结论：这条素材是什么、可迁移的核心是什么 */
+  verdict: string;
+  classification: {
+    /** 母题一句话「X 被 Y 阻断，用 Z 解决」；说不清为 unclear */
+    motif: string;
+    hook_mechanism: string;
+    hook_reason?: string;
+    form_tags: string[];
+    timeliness: string;
+    opening_3s_solution: string;
+    /** 3 秒内是否完成关系说明 */
+    opening_3s_relation_ok?: boolean;
+    brand_implant_level: string;
+  };
+  structure: {
+    segments: Array<{ kind: string; start_s: number; end_s: number; summary: string }>;
+    ab_bridge_mode: string;
+    b_grammar_narrative?: string[];
+    b_grammar_ui?: string[];
+    visual_route?: string;
+    conflict_trigger: string;
+  };
+  content: {
+    setting: string;
+    characters?: string;
+    key_visuals: string[];
+    choice_chain?: Array<{ beat: string; choice: string; feedback: string }>;
+    strong_feedback_points?: string[];
+  };
+  emotion: {
+    primary_entry: string;
+    secondary_entry?: string | null;
+    threat_ladder?: string | null;
+    /** 一句话情绪轨迹：哪里心疼/哪里爽 */
+    emotion_curve: string;
+  };
+  transferable_structure: {
+    /** 转化结构固定项（母题/骨架/桥接/情绪机制） */
+    fixed: string[];
+    /** 可换表皮项（场景/角色/美术/题材） */
+    reskinnable: string[];
+    /** 禁止迁移项（合规与留存生命线） */
+    do_not_copy: string[];
+  };
+  selling_point_candidates: {
+    /** 只能取自 product-facts 卖点清单 */
+    mappable_points: string[];
+    spectrum_layer: string;
+    mapping_gaps?: string[];
+    /** product-facts 缺失项清单（缺失时列这里，不编造） */
+    missing_product_facts?: string[];
+  };
+  evidence_label: string;
+  uncertainties: string[];
+  /** 词表缺口候选：本次诊断中 AI 判不出枚举值时提名的新词（可选，后端聚合进 /lab/vocab-gaps） */
+  vocab_gaps?: LabVocabGap[];
+}
+
+/** 落库的定性诊断（GET /lab/analysis 内嵌 + POST /lab/diagnoses 返回）。 */
+export interface LabDiagnosis {
+  asset_id: string;
+  output: LabDiagnosisOutput;
+  /** 证据分级：performance_supported / graph_supported / reference_only */
+  evidence_label: string;
+  prompt_version: string;
+  engine_version: string;
+  /** 报告输出语言（"zh"/"en"）；存量旧行可能缺该字段，前端按 "zh" 兜底 */
+  lang: string;
+  created_at: string;
+}
+
+/** 图证据：库内相似素材计数；无 embedding 或无候选时为 null（降级展示）。 */
+export interface LabGraphEvidence {
+  similar_count: number;
+  threshold: number;
+}
+
+/** GET /lab/analysis/{asset_id} payload：观察层 + 当前诊断 + 证据只读视图。 */
+export interface LabAnalysisResponse {
+  asset_id: string;
+  analysis_status: AnalysisStatus;
+  observation: LabObservation | null;
+  /** 当前 prompt 版本的诊断；未诊断为 null */
+  diagnosis: LabDiagnosis | null;
+  /** 存在旧版本诊断（词表/prompt 已升级，可重新诊断） */
+  diagnosis_stale: boolean;
+  /** 另一语言已有当前版本报告——本次诊断可走翻译路径（约 30 秒），否则全量生成 1–3 分钟 */
+  other_lang_available: boolean;
+  graph_evidence: LabGraphEvidence | null;
+  product_facts: ProductFacts;
+}
+
+// ---------------------------------------------------------------------------
 // Settings (§3)
 // ---------------------------------------------------------------------------
 
@@ -456,6 +658,8 @@ export interface SettingsResponse {
   archive_idle_days: number;
   /** 生命周期自动流转总开关（active→watch 自动标记） */
   lifecycle_auto_enabled: boolean;
+  /** 产品事实（Creative Lab M1 诊断 prompt 注入用；{} = 未配置） */
+  product_facts?: ProductFacts;
 }
 
 /** embedding 后端三态（services/embedding.EMBEDDING_BACKENDS） */
@@ -480,6 +684,8 @@ export interface UpdateSettingsRequest {
   archive_idle_days?: number;
   lifecycle_auto_enabled?: boolean;
   market_prefixes?: string[];
+  /** 产品事实（Creative Lab M1）；空 list 提交空数组，缺键不动旧值 */
+  product_facts?: ProductFacts;
 }
 
 /** GET /settings/ai/models：端点可用模型 id 列表 */

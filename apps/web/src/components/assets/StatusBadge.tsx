@@ -1,15 +1,18 @@
 import type { AnalysisStatus } from "@shared";
+import { useT } from "../../lib/i18n";
 import { Badge } from "../ui/badge";
 
-const STATUS_META: Record<AnalysisStatus, { label: string; variant: "secondary" | "warning" | "success" | "destructive" | "outline" }> = {
-  pending: { label: "Pending", variant: "warning" },
-  processing: { label: "Processing", variant: "warning" },
-  completed: { label: "Completed", variant: "success" },
-  failed: { label: "Failed", variant: "destructive" },
-  none: { label: "None", variant: "secondary" },
+const STATUS_VARIANT: Record<AnalysisStatus, "secondary" | "warning" | "success" | "destructive" | "outline"> = {
+  pending: "warning",
+  processing: "warning",
+  completed: "success",
+  failed: "destructive",
+  none: "secondary",
 };
 
 export function StatusBadge({ status }: { status: AnalysisStatus }) {
-  const meta = STATUS_META[status] ?? STATUS_META.none;
-  return <Badge variant={meta.variant}>{meta.label}</Badge>;
+  const t = useT();
+  // 未知状态（后端新增枚举时）按 none 兜底
+  const safe: AnalysisStatus = status in STATUS_VARIANT ? status : "none";
+  return <Badge variant={STATUS_VARIANT[safe]}>{t(`assets.status.${safe}`)}</Badge>;
 }

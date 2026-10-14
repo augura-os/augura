@@ -6,14 +6,20 @@ import type {
   ApiResponse,
   AssetDetail,
   AssetListItem,
+  CreateDiagnosisRequest,
   Derivation,
   DerivationFactor,
   DerivationVerdict,
   DnaFamily,
   EvolutionChain,
   GraphResponse,
+  LabAnalysisResponse,
+  LabDiagnosis,
+  LabReferenceListOut,
+  LabVocabGapsResponse,
   MergeRequest,
   PerformanceRecord,
+  ProductFactsImportResult,
   RecommendationReport,
   ReviewQueue,
   RunAnalysisRequest,
@@ -24,6 +30,7 @@ import type {
   UploadResponse,
 } from "@shared";
 import { apiClient } from "./client";
+import { getLang, type Lang } from "../lib/i18n";
 
 /** Unwrap the { success, data, message } envelope; throws a readable Error on failure. */
 async function unwrap<T>(promise: Promise<AxiosResponse<ApiResponse<T>>>): Promise<T> {
@@ -209,6 +216,11 @@ export function updateAsset(id: string, body: UpdateAssetRequest): Promise<Asset
   return unwrap(apiClient.put<ApiResponse<AssetDetail>>(`/assets/${id}`, body));
 }
 
+/** DELETE /assets/{id} — 永久删除素材及其分析结果、图谱节点与文件（不可恢复）。 */
+export function deleteAsset(assetId: string): Promise<null> {
+  return unwrap(apiClient.delete<ApiResponse<null>>(`/assets/${assetId}`));
+}
+
 // --- Analysis ----------------------------------------------------------------
 
 export function runAnalysis(assetId: string): Promise<AnalysisResult> {
@@ -252,6 +264,24 @@ export function testAiConnection(visionModel?: string): Promise<AiTestResult> {
   );
 }
 
+/** POST /settings/product-facts/import — 上传产品资料文件（md/txt/docx/pdf），
+ *  LLM 解析为 product_facts。不落库：返回结果回填表单，用户检查后走 PUT 保存。
+ *  LLM 解析同步执行，放宽超时（与 runAnalysis 同口径）。 */
+export function importProductFacts(file: File): Promise<ProductFactsImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  return unwrap(
+    apiClient.post<ApiResponse<ProductFactsImportResult>>(
+      "/settings/product-facts/import",
+      form,
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 180000,
+      },
+    ),
+  );
+}
+
 // --- Upload ------------------------------------------------------------------
 
 export function uploadFile(
@@ -284,4 +314,59 @@ export function updateLifecycle(
       body,
     ),
   );
+}
+
+// --- Creative Lab (M1) -------------------------------------------------------
+
+/** POST /lab/references — 竞品参考上传（与 /upload 同一 ingest；
+ *  新建 asset 自动打 competitor-reference 标签并进分析队列）。 */
+export function uploadLabReference(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append("files", file);
+  return unwrap(
+    apiClient.post<ApiResponse<UploadResponse>>("/lab/references", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 300000,
+      onUploadProgress: (event) => {
+        if (onProgress && event.total && event.total > 0) {
+          onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+        }
+      },
+    }),
+  );
+}
+
+/** GET /lab/references — 已上传竞品参考列表（created_at 倒序），
+ *  每项带当前/旧版本报告语言清单；参考步「已分析参考」历史列表用。 */
+export function getLabReferences(): Promise<LabReferenceListOut> {
+  return unwrap(apiClient.get<ApiResponse<LabReferenceListOut>>("/lab/references"));
+}
+
+/** GET /lab/analysis/{assetId}?lang= — 观察层 + 当前诊断 + 证据只读视图（轮询用）。
+ *  诊断按 (asset, prompt_version, lang) 存储：该语言无行时 diagnosis=null。 */
+export function getLabAnalysis(assetId: string, lang: Lang): Promise<LabAnalysisResponse> {
+  return unwrap(
+    apiClient.get<ApiResponse<LabAnalysisResponse>>(`/lab/analysis/${assetId}`, {
+      params: { lang },
+    }),
+  );
+}
+
+/** POST /lab/diagnoses — 同步跑定性诊断（推理型端点常态 1–3 分钟，重试场景翻倍），
+ *  超时与 nginx proxy_read_timeout（600s）对齐。
+ *  报告语言默认跟随界面语言；调用方显式传 lang 时以调用方为准。 */
+export function createLabDiagnosis(body: CreateDiagnosisRequest): Promise<LabDiagnosis> {
+  const payload: CreateDiagnosisRequest = { lang: getLang(), force_regenerate: false, ...body };
+  return unwrap(
+    apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", payload, { timeout: 600000 }),
+  );
+}
+
+/** GET /lab/vocab-gaps — 跨素材聚合的词表缺口候选（count 降序；
+ *  count ≥ suggest_threshold 的候选前端标记「建议准入」）。 */
+export function getLabVocabGaps(): Promise<LabVocabGapsResponse> {
+  return unwrap(apiClient.get<ApiResponse<LabVocabGapsResponse>>("/lab/vocab-gaps"));
 }

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileImage, FileSpreadsheet, FileVideo, RotateCcw, Search } from "lucide-react";
-import type { FileType } from "@shared";
-import { useAssets, useRetryAnalysisJob } from "../hooks/useAssets";
+import { FileImage, FileSpreadsheet, FileVideo, RotateCcw, Search, Trash2 } from "lucide-react";
+import type { AssetListItem, FileType } from "@shared";
+import { useAssets, useDeleteAsset, useRetryAnalysisJob } from "../hooks/useAssets";
 import { StatusBadge } from "../components/assets/StatusBadge";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Dialog } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import {
@@ -46,6 +48,9 @@ export default function AssetListPage() {
   const { data, isLoading, isError, error, isFetching } = useAssets(search);
   const retryJob = useRetryAnalysisJob();
   const [retryError, setRetryError] = useState<string | null>(null);
+  const deleteAsset = useDeleteAsset();
+  // 待确认删除的素材（null = 对话框关闭）
+  const [deleteTarget, setDeleteTarget] = useState<AssetListItem | null>(null);
   const filtered = data?.filter((asset) =>
     lifecycleFilter === "all"
       ? true
@@ -53,6 +58,13 @@ export default function AssetListPage() {
         ? (asset.lifecycle_state ?? "active") === "active"
         : asset.lifecycle_state === lifecycleFilter,
   );
+
+  const onConfirmDelete = () => {
+    if (!deleteTarget) return;
+    deleteAsset.mutate(deleteTarget.id, {
+      onSuccess: () => setDeleteTarget(null),
+    });
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -114,7 +126,7 @@ export default function AssetListPage() {
                 <TableHead className="w-[72px]">{t("assets.list.colPreview")}</TableHead>
                 <TableHead>{t("assets.list.colFilename")}</TableHead>
                 <TableHead className="w-[180px]">{t("assets.list.colUploaded")}</TableHead>
-                <TableHead className="w-[130px]">{t("assets.list.colAiStatus")}</TableHead>
+                <TableHead className="w-[220px]">{t("assets.list.colAiStatus")}</TableHead>
                 <TableHead>{t("assets.list.colCreative")}</TableHead>
               </TableRow>
             </TableHeader>
@@ -167,7 +179,7 @@ export default function AssetListPage() {
                   </TableCell>
                   <TableCell className="text-neutral-500">{formatTime(asset.created_at)}</TableCell>
                   <TableCell>
-                    <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
                       <StatusBadge status={asset.analysis_status} />
                       {asset.analysis_status === "failed" ? (
                         <button
@@ -185,12 +197,25 @@ export default function AssetListPage() {
                                 ),
                             });
                           }}
-                          className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-50"
+                          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-50"
                         >
                           <RotateCcw className="h-3 w-3" />
                           {t("assets.list.retry")}
                         </button>
                       ) : null}
+                      <button
+                        type="button"
+                        title={t("assets.list.deleteTitle")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteAsset.reset();
+                          setDeleteTarget(asset);
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-red-50 hover:text-red-700"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        {t("assets.list.delete")}
+                      </button>
                       {asset.confidence !== null && asset.confidence < 0.7 ? (
                         <Badge
                           variant="warning"
@@ -225,6 +250,40 @@ export default function AssetListPage() {
           <p className="text-xs text-neutral-400">{t("assets.list.refreshing")}</p>
         ) : null}
       </div>
+
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteAsset.isPending) setDeleteTarget(null);
+        }}
+        title={t("assets.list.deleteConfirmTitle")}
+        footer={
+          <>
+            <Button size="sm" variant="outline" onClick={() => setDeleteTarget(null)}>
+              {t("assets.list.deleteCancel")}
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deleteAsset.isPending}
+              onClick={onConfirmDelete}
+            >
+              {deleteAsset.isPending
+                ? t("assets.list.deleting")
+                : t("assets.list.deleteConfirm")}
+            </Button>
+          </>
+        }
+      >
+        <p>
+          {t("assets.list.deleteConfirmDesc").replace("{name}", deleteTarget?.filename ?? "")}
+        </p>
+        {deleteAsset.isError ? (
+          <p className="mt-2 text-xs text-red-600">
+            {apiErrorText(deleteAsset.error, t) || t("assets.list.deleteFailed")}
+          </p>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Final, Sequence
 
 from sqlalchemy import delete, exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Tag, TagAssignment
+
+# 竞品参考来源标签名（/lab/references 入口统一打标；图谱过滤与聚类隔离
+# 共用此常量，避免各处散落字面量）。
+COMPETITOR_REFERENCE_TAG: Final = "competitor-reference"
+
+# 来源标记标签：人工/入口赋予的「这素材从哪来」事实，pipeline 自动打标签
+# （replace 语义）不得抹掉——抹掉会让竞品参考混入自有素材池无法区分。
+STICKY_SOURCE_TAGS: Final = frozenset({COMPETITOR_REFERENCE_TAG})
 
 
 def normalize_tag_names(names: Sequence[str]) -> list[str]:
@@ -21,6 +29,25 @@ def normalize_tag_names(names: Sequence[str]) -> list[str]:
             seen.add(clean)
             normalized.append(clean)
     return normalized
+
+
+def preserve_sticky_tags(
+    existing_names: Sequence[str], incoming_names: Sequence[str]
+) -> list[str]:
+    """把 existing 中的 sticky 来源标签并入 incoming（去重保序）。
+
+    供 replace 语义的自动打标签路径（pipeline 重分析）调用：AI 产出的
+    incoming 原样在前，existing 里属于 STICKY_SOURCE_TAGS 的名字按原顺序
+    补在末尾（已在 incoming 中则跳过）。人工 PUT tags 不走这里——全替换
+    是 deliberate 移除来源标记的逃生舱。
+    """
+    merged = normalize_tag_names(incoming_names)
+    seen = set(merged)
+    for name in existing_names:
+        if name in STICKY_SOURCE_TAGS and name not in seen:
+            seen.add(name)
+            merged.append(name)
+    return merged
 
 
 class TagRepository:

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 
 from app.api.deps import DbDep, SettingsDep
 from app.exceptions import ApiError
@@ -16,9 +17,11 @@ from app.schemas.settings import (
     AiModelsInfo,
     AiTestRequest,
     AiTestResult,
+    ProductFactsImportResult,
     SettingsInfo,
     SettingsUpdate,
 )
+from app.services import product_facts_import
 from app.services.embedding import (
     EMBEDDING_BACKEND_SETTING,
     EMBEDDING_BACKENDS,
@@ -48,6 +51,10 @@ from app.services.settings import (
     MARKET_THRESHOLDS_SETTING,
     METRIC_PROFILE_SETTING,
     METRIC_THRESHOLDS_SETTING,
+    PRODUCT_FACTS_ALLOWED_KEYS,
+    PRODUCT_FACTS_KEY,
+    PRODUCT_FACTS_LIST_KEYS,
+    PRODUCT_FACTS_STR_KEY,
     SCORE_WEIGHT_CONFIDENCE_SETTING,
     SCORE_WEIGHT_EVOLUTION_SETTING,
     SCORE_WEIGHT_FRESHNESS_SETTING,
@@ -58,6 +65,7 @@ from app.services.settings import (
     resolve_ai_config,
     resolve_market_threshold_overrides,
     resolve_metric_config,
+    resolve_product_facts,
     resolve_score_config,
     test_provider_connection,
 )
@@ -127,6 +135,7 @@ def get_settings_info(db: DbDep, settings: SettingsDep) -> Envelope[SettingsInfo
             archive_score_threshold=score_config.archive_score_threshold,
             archive_idle_days=score_config.archive_idle_days,
             lifecycle_auto_enabled=score_config.auto_enabled,
+            product_facts=resolve_product_facts(db),
         )
     )
 
@@ -301,6 +310,39 @@ def update_settings(
                 params={"prefixes": ", ".join(bad)},
             )
         repo.set(MARKET_PREFIXES_SETTING, ",".join(cleaned))
+    if payload.product_facts is not None:
+        if not isinstance(payload.product_facts, dict):
+            raise ApiError(
+                400,
+                "product_facts 必须是对象",
+                code="settings_product_facts_not_dict",
+            )
+        for key, value in payload.product_facts.items():
+            if key not in PRODUCT_FACTS_ALLOWED_KEYS:
+                raise ApiError(
+                    400,
+                    f"未知 product_facts 键：{key}",
+                    code="settings_unknown_product_facts_key",
+                    params={"key": key},
+                )
+            if key == PRODUCT_FACTS_STR_KEY and not isinstance(value, str):
+                raise ApiError(
+                    400,
+                    f"product_facts.{key} 必须是字符串",
+                    code="settings_product_facts_bad_value",
+                    params={"key": key},
+                )
+            if key in PRODUCT_FACTS_LIST_KEYS and (
+                not isinstance(value, list)
+                or not all(isinstance(item, str) for item in value)
+            ):
+                raise ApiError(
+                    400,
+                    f"product_facts.{key} 必须是字符串数组",
+                    code="settings_product_facts_bad_value",
+                    params={"key": key},
+                )
+        repo.set(PRODUCT_FACTS_KEY, json.dumps(payload.product_facts))
     db.commit()
     return get_settings_info(db, settings)
 
@@ -338,4 +380,27 @@ def test_ai_connection(
             code=result.code,
             params=result.params or {},
         )
+    )
+
+
+@router.post(
+    "/settings/product-facts/import", response_model=Envelope[ProductFactsImportResult]
+)
+def import_product_facts_file(
+    db: DbDep,
+    settings: SettingsDep,
+    file: Annotated[UploadFile, File(...)],
+) -> Envelope[ProductFactsImportResult]:
+    """上传产品资料文件（md/txt/docx/pdf ≤5MB），LLM 解析为 product_facts。
+
+    不落库：返回结果由前端回填表单，用户检查后走正常 PUT /settings 保存。
+    """
+    outcome = product_facts_import.import_product_facts(db, settings, file)
+    return ok(
+        ProductFactsImportResult(
+            product_facts=outcome.product_facts,
+            extracted_chars=outcome.extracted_chars,
+            truncated=outcome.truncated,
+        ),
+        message="解析完成",
     )

@@ -97,14 +97,14 @@ function ItemCard({
   ].join("\n");
   return (
     <div className="rounded-lg px-2 py-1.5 transition hover:bg-black/[0.04]">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <span className={cn("h-6 w-0.5 shrink-0 rounded-full", GROUP_META[group].bar)} />
         <button
           onClick={() => onSelect(`creative:${item.creative_id}`)}
-          className="min-w-0 flex-1 text-left"
+          className="min-w-40 flex-1 text-left"
           title={tooltip}
         >
-          <span className="flex items-center gap-1.5">
+          <span className="flex flex-wrap items-center gap-1.5">
             <span
               className={cn(
                 "shrink-0 rounded px-1 py-px text-[10px] font-semibold",

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { ArrowDown, ArrowUp, FileUp, Loader2, Plus, Trash2 } from "lucide-react";
 import type { AiTestResult, EmbeddingBackend } from "@shared";
 import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
-import { fetchAiModels, testAiConnection } from "../services/api";
+import { useLabVocabGaps } from "../hooks/useLab";
+import { fetchAiModels, importProductFacts, testAiConnection } from "../services/api";
 import {
   DEFAULT_THRESHOLDS,
   JUDGEABLE_METRICS,
@@ -17,8 +20,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
+import { Textarea } from "../components/ui/textarea";
 import { aiTestResultText, apiErrorText } from "../lib/apiErrorText";
 import { useLanguage, useT, type Lang } from "../lib/i18n";
+import { labFieldLabel } from "../lib/labEnums";
 import { cn } from "../lib/utils";
 
 /** 一键预设：填好 base_url + vision_model + embedding_model。
@@ -70,6 +75,8 @@ const marketCodeOf = (prefix: string, codes: string[]): string => {
 const SECTIONS = [
   { id: "general", labelKey: "settings.nav.general" },
   { id: "ai", labelKey: "settings.nav.ai" },
+  { id: "product-facts", labelKey: "settings.nav.productFacts" },
+  { id: "vocab-gaps", labelKey: "settings.nav.vocabGaps" },
   { id: "metrics", labelKey: "settings.nav.metrics" },
   { id: "scoring", labelKey: "settings.nav.scoring" },
   { id: "autojudge", labelKey: "settings.nav.autojudge" },
@@ -118,11 +125,84 @@ function GeneralSection() {
   );
 }
 
+/** 词表缺口 section：AI 判不出的枚举值跨素材聚合提名（GET /lab/vocab-gaps）。
+ *  复现到 suggest_threshold 标「建议准入」；准入本身仍人工改词表，系统不自动升级。 */
+function VocabGapsSection() {
+  const t = useT();
+  const { data, isLoading, isError, error } = useLabVocabGaps();
+  const threshold = data?.suggest_threshold ?? 2;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("settings.vocabGaps.title")}</CardTitle>
+        <CardDescription>{t("settings.vocabGaps.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError || !data ? (
+          <p className="text-sm text-red-600">
+            {apiErrorText(error, t) || t("settings.vocabGaps.loadFailed")}
+          </p>
+        ) : data.items.length === 0 ? (
+          <p className="text-sm text-neutral-500">{t("settings.vocabGaps.empty")}</p>
+        ) : (
+          data.items.map((gap) => {
+            const suggested = gap.count >= threshold;
+            return (
+              <div
+                key={`${gap.field}:${gap.proposal}`}
+                className="rounded-md border border-[#e5e5e5] px-3 py-2.5"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-neutral-500">{labFieldLabel(gap.field)}</span>
+                  <span className="text-sm font-semibold text-neutral-900">{gap.proposal}</span>
+                  <Badge variant={suggested ? "warning" : "secondary"}>
+                    {t("settings.vocabGaps.count").replace("{n}", String(gap.count))}
+                  </Badge>
+                  {suggested ? (
+                    <Badge variant="warning">{t("settings.vocabGaps.suggested")}</Badge>
+                  ) : null}
+                </div>
+                {gap.rationale ? (
+                  <p className="mt-1 text-xs text-neutral-500">{gap.rationale}</p>
+                ) : null}
+                {gap.recent_assets.length > 0 ? (
+                  <p className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs">
+                    {gap.recent_assets.map((asset) => (
+                      <Link
+                        key={asset.asset_id}
+                        to={`/assets/${asset.asset_id}`}
+                        className="text-neutral-500 underline underline-offset-2 hover:text-neutral-900"
+                      >
+                        {asset.filename}
+                      </Link>
+                    ))}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const t = useT();
   const { data, isLoading, isError, error } = useSettings();
   const updateMutation = useUpdateSettings();
-  const [section, setSection] = useState<SectionId>("general");
+  // section 由 URL 驱动（?section=）：无参/未知值回退首区块 general，裸链行为不变
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sectionParam = searchParams.get("section");
+  const section: SectionId = SECTIONS.some((item) => item.id === sectionParam)
+    ? (sectionParam as SectionId)
+    : "general";
+  const selectSection = (id: SectionId) => {
+    // 首区块保持裸链 /settings；其余区块写 ?section=<id>
+    setSearchParams(id === "general" ? {} : { section: id });
+  };
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [visionModel, setVisionModel] = useState("");
@@ -157,6 +237,18 @@ export default function SettingsPage() {
   const [archiveScoreThreshold, setArchiveScoreThreshold] = useState<number>(30);
   const [archiveIdleDays, setArchiveIdleDays] = useState<number>(7);
   const [scoreFeedback, setScoreFeedback] = useState<string>("");
+  // 产品事实（Creative Lab M1）：诊断 prompt 注入用
+  const [coreLoop, setCoreLoop] = useState("");
+  const [sellingPoints, setSellingPoints] = useState<string[]>([]);
+  const [mustShow, setMustShow] = useState<string[]>([]);
+  const [forbiddenClaims, setForbiddenClaims] = useState<string[]>([]);
+  const [complianceLimits, setComplianceLimits] = useState<string[]>([]);
+  const [successMetricDefs, setSuccessMetricDefs] = useState<string[]>([]);
+  const [factsFeedback, setFactsFeedback] = useState<string>("");
+  const [factsFeedbackOk, setFactsFeedbackOk] = useState(false);
+  // 产品资料文件上传解析（POST /settings/product-facts/import；只回填表单不自动保存）
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (data) {
@@ -182,6 +274,13 @@ export default function SettingsPage() {
       setScoreWeights(data.score_weights ?? {});
       setArchiveScoreThreshold(data.archive_score_threshold ?? 30);
       setArchiveIdleDays(data.archive_idle_days ?? 7);
+      const facts = data.product_facts ?? {};
+      setCoreLoop(facts.core_loop ?? "");
+      setSellingPoints(facts.selling_points ?? []);
+      setMustShow(facts.must_show ?? []);
+      setForbiddenClaims(facts.forbidden_claims ?? []);
+      setComplianceLimits(facts.compliance_limits ?? []);
+      setSuccessMetricDefs(facts.success_metric_defs ?? []);
     }
   }, [data]);
 
@@ -314,6 +413,64 @@ export default function SettingsPage() {
     );
   };
 
+  // 产品事实：一次 PUT 全量六键；空行 trim 后丢弃，空 list 提交空数组
+  const onSaveProductFacts = () => {
+    const clean = (list: string[]) =>
+      list.map((item) => item.trim()).filter((item) => item.length > 0);
+    updateMutation.mutate(
+      {
+        product_facts: {
+          core_loop: coreLoop.trim(),
+          selling_points: clean(sellingPoints),
+          must_show: clean(mustShow),
+          forbidden_claims: clean(forbiddenClaims),
+          compliance_limits: clean(complianceLimits),
+          success_metric_defs: clean(successMetricDefs),
+        },
+      },
+      {
+        onSuccess: () => {
+          setFactsFeedback(t("common.saved"));
+          setFactsFeedbackOk(true);
+          setTimeout(() => setFactsFeedback(""), 3000);
+        },
+        onError: (mutationError) => {
+          setFactsFeedback(apiErrorText(mutationError, t) || t("common.saveFailed"));
+          setFactsFeedbackOk(false);
+        },
+      },
+    );
+  };
+
+  // 上传产品资料自动解析：结果只回填表单 state（不自动保存），
+  // 用户检查后点「保存产品事实」走正常 PUT（human-in-the-loop）
+  const onImportProductFacts = (file: File) => {
+    setImporting(true);
+    importProductFacts(file)
+      .then((result) => {
+        const facts = result.product_facts ?? {};
+        setCoreLoop(facts.core_loop ?? "");
+        setSellingPoints(facts.selling_points ?? []);
+        setMustShow(facts.must_show ?? []);
+        setForbiddenClaims(facts.forbidden_claims ?? []);
+        setComplianceLimits(facts.compliance_limits ?? []);
+        setSuccessMetricDefs(facts.success_metric_defs ?? []);
+        setFactsFeedback(
+          result.truncated
+            ? t("settings.productFacts.importedTruncated")
+            : t("settings.productFacts.imported"),
+        );
+        setFactsFeedbackOk(true);
+      })
+      .catch((importError) => {
+        setFactsFeedback(
+          apiErrorText(importError, t) || t("settings.productFacts.importFailed"),
+        );
+        setFactsFeedbackOk(false);
+      })
+      .finally(() => setImporting(false));
+  };
+
   const toggleInList = (list: string[], key: string, order: string[]): string[] =>
     list.includes(key)
       ? list.filter((item) => item !== key)
@@ -374,7 +531,7 @@ export default function SettingsPage() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setSection(item.id)}
+                onClick={() => selectSection(item.id)}
                 className={cn(
                   "w-full rounded-md px-3 py-1.5 text-left text-sm transition",
                   section === item.id
@@ -389,6 +546,8 @@ export default function SettingsPage() {
 
           <div className="min-w-0 flex-1">
         {section === "general" ? <GeneralSection /> : null}
+
+        {section === "vocab-gaps" ? <VocabGapsSection /> : null}
 
         {section === "ai" ? (
         <Card>
@@ -614,6 +773,123 @@ export default function SettingsPage() {
                 {t("settings.savedNote")}
               </p>
             ) : null}
+          </CardContent>
+        </Card>
+        ) : null}
+
+        {section === "product-facts" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("settings.productFacts.title")}</CardTitle>
+            <CardDescription>
+              {t("settings.productFacts.description")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-3 rounded-md border border-dashed border-[#e5e5e5] bg-neutral-50 px-3 py-2.5">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={importing}
+                onClick={() => importFileRef.current?.click()}
+              >
+                {importing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileUp className="h-3.5 w-3.5" />
+                )}
+                {importing
+                  ? t("settings.productFacts.importing")
+                  : t("settings.productFacts.import")}
+              </Button>
+              <p className="text-xs text-neutral-400">{t("settings.productFacts.importHint")}</p>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".md,.txt,.docx,.pdf"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) onImportProductFacts(file);
+                  // 清空 value 允许重选同一文件再次解析
+                  event.target.value = "";
+                }}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="core_loop">{t("settings.productFacts.coreLoop")}</Label>
+              <Textarea
+                id="core_loop"
+                placeholder={t("settings.productFacts.coreLoopPlaceholder")}
+                value={coreLoop}
+                onChange={(event) => setCoreLoop(event.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.sellingPoints")}</Label>
+              <StringListEditor
+                items={sellingPoints}
+                onChange={setSellingPoints}
+                addLabel={t("settings.productFacts.addItem")}
+                reorderable
+              />
+              <p className="text-xs text-neutral-400">
+                {t("settings.productFacts.orderedHint")}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.mustShow")}</Label>
+              <StringListEditor
+                items={mustShow}
+                onChange={setMustShow}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.forbiddenClaims")}</Label>
+              <StringListEditor
+                items={forbiddenClaims}
+                onChange={setForbiddenClaims}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.complianceLimits")}</Label>
+              <StringListEditor
+                items={complianceLimits}
+                onChange={setComplianceLimits}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t("settings.productFacts.successMetricDefs")}</Label>
+              <StringListEditor
+                items={successMetricDefs}
+                onChange={setSuccessMetricDefs}
+                addLabel={t("settings.productFacts.addItem")}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button onClick={onSaveProductFacts} disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? t("common.saving") : t("settings.productFacts.save")}
+              </Button>
+              {factsFeedback ? (
+                <span
+                  className={
+                    factsFeedbackOk ? "text-sm text-emerald-600" : "text-sm text-red-600"
+                  }
+                >
+                  {factsFeedback}
+                </span>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
         ) : null}
@@ -970,6 +1246,80 @@ export default function SettingsPage() {
         ) : null}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface StringListEditorProps {
+  items: string[];
+  onChange: (items: string[]) => void;
+  addLabel: string;
+  /** 有序列表（如卖点清单）开启上移/下移 */
+  reorderable?: boolean;
+}
+
+/** 字符串列表编辑器（product-facts 各清单共用）：行内编辑 + 增删，可选排序。 */
+function StringListEditor({ items, onChange, addLabel, reorderable = false }: StringListEditorProps) {
+  const t = useT();
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= items.length) return;
+    const next = [...items];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+  return (
+    <div className="space-y-1.5">
+      {items.map((item, index) => (
+        <div key={index} className="flex items-center gap-1">
+          <Input
+            value={item}
+            onChange={(event) =>
+              onChange(items.map((prev, i) => (i === index ? event.target.value : prev)))
+            }
+            autoComplete="off"
+          />
+          {reorderable ? (
+            <>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                disabled={index === 0}
+                onClick={() => move(index, -1)}
+                title={t("settings.productFacts.moveUp")}
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                disabled={index === items.length - 1}
+                onClick={() => move(index, 1)}
+                title={t("settings.productFacts.moveDown")}
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : null}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 shrink-0 text-neutral-400 hover:text-red-600"
+            onClick={() => onChange(items.filter((_, i) => i !== index))}
+            title={t("settings.productFacts.removeItem")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ))}
+      <div>
+        <Button size="sm" variant="outline" onClick={() => onChange([...items, ""])}>
+          <Plus className="h-3.5 w-3.5" />
+          {addLabel}
+        </Button>
       </div>
     </div>
   );

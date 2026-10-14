@@ -1,5 +1,6 @@
 import * as React from "react";
 import { X } from "lucide-react";
+import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 
 export interface DialogProps {
@@ -13,6 +14,7 @@ export interface DialogProps {
 
 /** Minimal hand-rolled dialog in the shadcn visual style (no portals/radix). */
 export function Dialog({ open, onOpenChange, title, description, children, footer }: DialogProps) {
+  const t = useT();
   if (!open) return null;
   return (
     <div
@@ -36,7 +38,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
           </div>
           <button
             type="button"
-            aria-label="Close"
+            aria-label={t("common.close")}
             className="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
             onClick={() => onOpenChange(false)}
           >

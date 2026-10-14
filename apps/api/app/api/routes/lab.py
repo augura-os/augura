@@ -1,7 +1,10 @@
-"""Creative Lab 路由（M1）：竞品参考上传 / 分析视图 / 定性诊断 / 词表缺口聚合。
+"""Creative Lab 路由（M1）：竞品参考上传 / 历史参考列表 / 分析视图 / 定性诊断 / 词表缺口聚合。
 
 - ``POST /lab/references``：与 /upload 同一 ingest 核心，新建 asset 全部
   打 competitor-reference 来源标记（sticky，pipeline 重分析不抹）。
+- ``GET /lab/references``：历史参考列表——带 competitor-reference 标签
+  且生命周期 active（未归族视为 active）的素材，created_at 倒序，
+  每条附诊断语言分组（current/stale langs）。
 - ``GET /lab/analysis/{asset_id}?lang=``：观察层 + 当前 prompt 版本该语言
   诊断 + stale 标记（按语言维度）+ 另一语言报告可用性 + 图证据 +
   product-facts 的只读视图。
@@ -36,9 +39,11 @@ from app.schemas.lab import (
     LabAnalysisView,
     LabDiagnosisOut,
     LabDiagnosisRequest,
+    LabReferenceItem,
+    LabReferenceListOut,
     VocabGapListOut,
 )
-from app.services import lab_diagnosis, lab_vocab_gaps
+from app.services import lab_diagnosis, lab_references, lab_vocab_gaps
 from app.services.ingest import ingest_files
 from app.services.lab_prompts import LAB_PROMPT_VERSION
 from app.services.settings import resolve_product_facts
@@ -99,6 +104,21 @@ def upload_references(
         ),
         message=message,
     )
+
+
+@router.get("/lab/references", response_model=Envelope[LabReferenceListOut])
+def list_references(db: DbDep) -> Envelope[LabReferenceListOut]:
+    items = [
+        LabReferenceItem(
+            **to_asset_list_item(
+                row.asset, row.creative_name, row.confidence, row.lifecycle_state
+            ).model_dump(),
+            diagnosis_current_langs=row.diagnosis_current_langs,
+            diagnosis_stale_langs=row.diagnosis_stale_langs,
+        )
+        for row in lab_references.list_reference_rows(db)
+    ]
+    return ok(LabReferenceListOut(items=items))
 
 
 @router.get("/lab/analysis/{asset_id}", response_model=Envelope[LabAnalysisView])

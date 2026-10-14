@@ -1,4 +1,4 @@
-"""Creative Lab DTOs（M1：诊断服务端点 + 词表缺口聚合视图）。"""
+"""Creative Lab DTOs（M1：诊断服务端点 + 词表缺口聚合视图 + 历史参考列表）。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
+
+from app.schemas.asset import AssetListItem
 
 
 class AudienceContext(BaseModel):
@@ -85,3 +87,19 @@ class VocabGapListOut(BaseModel):
     items: list[VocabGapItem]
     # count ≥ 该值的缺口建议进入词表增补评审（透传给前端作高亮线）
     suggest_threshold: int
+
+
+class LabReferenceItem(AssetListItem):
+    """``GET /lab/references`` 的列表项：AssetListItem 全字段 + 诊断语言分组。"""
+
+    # 有当前 prompt 版本（LAB_PROMPT_VERSION）诊断行的语言
+    diagnosis_current_langs: list[str]
+    # 有诊断行但只剩旧 prompt 版本的语言（与 current 不重叠：同语言新旧
+    # 版本行并存时归 current）
+    diagnosis_stale_langs: list[str]
+
+
+class LabReferenceListOut(BaseModel):
+    """Response data of ``GET /lab/references``。"""
+
+    items: list[LabReferenceItem]

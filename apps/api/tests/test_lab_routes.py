@@ -1,4 +1,4 @@
-"""Creative Lab 三端点路由测试（TestClient；LLM mock；fixture 虚构名）。"""
+"""Creative Lab 路由测试（TestClient；LLM mock；fixture 虚构名）。"""
 from __future__ import annotations
 
 import uuid
@@ -9,9 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models import AnalysisResult, CreativeAsset
+from app.models import AnalysisResult, Creative, CreativeAsset, CreativeVariant
 from app.repositories.creative_diagnoses import CreativeDiagnosisRepository
-from app.repositories.tags import TagRepository
+from app.repositories.tags import COMPETITOR_REFERENCE_TAG, TagRepository
 from app.services import lab_diagnosis
 from app.services.lab_prompts import LAB_PROMPT_VERSION
 from app.services.settings import AIConfig
@@ -782,3 +782,146 @@ class TestVocabGaps:
 
         data = api_client.get("/lab/vocab-gaps").json()["data"]
         assert data == {"items": [], "suggest_threshold": 2}
+
+
+class TestListReferences:
+    """GET /lab/references：带 competitor-reference 标签的 active 素材列表。"""
+
+    def _tag_reference(self, db: Session, asset: CreativeAsset) -> None:
+        TagRepository(db).set_asset_tags(asset.id, [COMPETITOR_REFERENCE_TAG])
+
+    def _assign_creative(
+        self, db: Session, asset: CreativeAsset, *, state: str, name: str = "fake-c"
+    ) -> None:
+        creative = Creative(id=str(uuid.uuid4()), name=name, lifecycle_state=state)
+        db.add(creative)
+        db.flush()
+        db.add(
+            CreativeVariant(
+                id=str(uuid.uuid4()),
+                creative_id=creative.id,
+                asset_id=asset.id,
+                name="fake-variant",
+            )
+        )
+        db.flush()
+
+    def _seed_diagnosis(
+        self,
+        db: Session,
+        asset_id: str,
+        *,
+        lang: str,
+        prompt_version: str = LAB_PROMPT_VERSION,
+    ) -> None:
+        CreativeDiagnosisRepository(db).upsert(
+            asset_id,
+            prompt_version=prompt_version,
+            lang=lang,
+            observation_snapshot={"summary": "虚构观察层"},
+            output=_valid_output(),
+            evidence_label="reference_only",
+            engine_version="auto:fake-vision-v1",
+            audience_context={"lang": lang},
+        )
+
+    def test_only_tagged_active_assets_listed(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 带标 + 未归族（lifecycle NULL 视为 active）→ 列出
+        orphan = _seed_asset(db_session, "FAKE-m18-ref-orphan.mp4")
+        self._tag_reference(db_session, orphan)
+        # 带标 + active creative → 列出（带 creative_name/lifecycle_state）
+        grouped = _seed_asset(db_session, "FAKE-m18-ref-active.mp4")
+        self._tag_reference(db_session, grouped)
+        self._assign_creative(db_session, grouped, state="active", name="fake-active-ref")
+        # 无标素材不列出
+        _seed_asset(db_session, "FAKE-m18-ref-untagged.mp4")
+        # 带标但所属 creative 非 active（watch / archived）→ 不列出
+        watched = _seed_asset(db_session, "FAKE-m18-ref-watch.mp4")
+        self._tag_reference(db_session, watched)
+        self._assign_creative(db_session, watched, state="watch")
+        archived = _seed_asset(db_session, "FAKE-m18-ref-archived.mp4")
+        self._tag_reference(db_session, archived)
+        self._assign_creative(db_session, archived, state="archived")
+
+        response = api_client.get("/lab/references")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        by_id = {item["id"]: item for item in body["data"]["items"]}
+        assert set(by_id) == {orphan.id, grouped.id}
+        assert by_id[orphan.id]["lifecycle_state"] is None
+        assert by_id[grouped.id]["creative_name"] == "fake-active-ref"
+        assert by_id[grouped.id]["lifecycle_state"] == "active"
+
+    def test_current_and_stale_langs_grouped(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 当前版本 zh 行 + 旧版本 en 行 → current=["zh"]、stale=["en"]
+        asset = _seed_asset(db_session, "FAKE-m18-ref-langs.mp4")
+        self._tag_reference(db_session, asset)
+        self._seed_diagnosis(db_session, asset.id, lang="zh")
+        self._seed_diagnosis(
+            db_session, asset.id, lang="en", prompt_version="lab-v0.0.0-legacy"
+        )
+        # 同语言新旧版本行并存 → 归 current，stale 不重叠
+        mixed = _seed_asset(db_session, "FAKE-m18-ref-langs-mixed.mp4")
+        self._tag_reference(db_session, mixed)
+        self._seed_diagnosis(db_session, mixed.id, lang="zh")
+        self._seed_diagnosis(
+            db_session, mixed.id, lang="zh", prompt_version="lab-v0.0.0-legacy"
+        )
+
+        items = api_client.get("/lab/references").json()["data"]["items"]
+
+        by_id = {item["id"]: item for item in items}
+        assert by_id[asset.id]["diagnosis_current_langs"] == ["zh"]
+        assert by_id[asset.id]["diagnosis_stale_langs"] == ["en"]
+        assert by_id[mixed.id]["diagnosis_current_langs"] == ["zh"]
+        assert by_id[mixed.id]["diagnosis_stale_langs"] == []
+
+    def test_reference_without_diagnosis_has_empty_langs(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        asset = _seed_asset(db_session, "FAKE-m18-ref-nodiag.mp4")
+        self._tag_reference(db_session, asset)
+
+        response = api_client.get("/lab/references")
+
+        assert response.status_code == 200
+        items = response.json()["data"]["items"]
+        assert len(items) == 1
+        item = items[0]
+        # AssetListItem 全字段 + 两个诊断语言分组字段
+        assert item["id"] == asset.id
+        assert item["filename"] == "FAKE-m18-ref-nodiag.mp4"
+        assert item["file_type"] == "video"
+        assert item["thumbnail_url"] == f"/assets/{asset.id}/media?variant=thumb"
+        assert item["created_at"]
+        assert item["analysis_status"] == "pending"
+        assert item["creative_name"] is None
+        assert item["confidence"] is None
+        assert item["lifecycle_state"] is None
+        assert item["diagnosis_current_langs"] == []
+        assert item["diagnosis_stale_langs"] == []
+
+    def test_items_ordered_by_created_at_desc(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        oldest = _seed_asset(db_session, "FAKE-m18-ref-ord-old.mp4")
+        newest = _seed_asset(db_session, "FAKE-m18-ref-ord-new.mp4")
+        middle = _seed_asset(db_session, "FAKE-m18-ref-ord-mid.mp4")
+        for asset, created_at in (
+            (oldest, datetime(2026, 10, 1, tzinfo=timezone.utc)),
+            (newest, datetime(2026, 10, 3, tzinfo=timezone.utc)),
+            (middle, datetime(2026, 10, 2, tzinfo=timezone.utc)),
+        ):
+            self._tag_reference(db_session, asset)
+            # 同事务落库 created_at 同为 func.now()（事务起点）；显式覆盖使排序可断言
+            asset.created_at = created_at
+        db_session.flush()
+
+        items = api_client.get("/lab/references").json()["data"]["items"]
+        assert [item["id"] for item in items] == [newest.id, middle.id, oldest.id]

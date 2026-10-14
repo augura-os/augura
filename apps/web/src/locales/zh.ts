@@ -441,6 +441,15 @@ export const zh: Record<string, string> = {
   "assets.list.emptySearch": "没有匹配的素材。",
   "assets.list.empty": "还没有素材 — 先上传一些。",
   "assets.list.refreshing": "刷新中…",
+  "assets.list.delete": "删除",
+  "assets.list.deleteTitle": "永久删除该素材（不可恢复）",
+  "assets.list.deleteConfirmTitle": "删除素材",
+  "assets.list.deleteConfirmDesc":
+    "将永久删除素材「{name}」及其分析结果、图谱节点与文件，不可恢复。",
+  "assets.list.deleteCancel": "取消",
+  "assets.list.deleteConfirm": "确认删除",
+  "assets.list.deleting": "删除中…",
+  "assets.list.deleteFailed": "删除失败",
 
   // --- 素材：详情页 ---
   "assets.detail.loadFailed": "加载素材失败",
@@ -535,6 +544,8 @@ export const zh: Record<string, string> = {
   "lab.report.rerun": "重新诊断",
   "lab.report.goSettings": "去 Settings 配置 →",
   "lab.report.stale": "词表 / prompt 已升级，当前报告基于旧版本——可重新诊断获得新版本结论。",
+  "lab.report.langMismatch":
+    "报告语言与当前界面语言不一致——点击「重新诊断」生成当前语言版本。",
   "lab.report.referenceOnly":
     "未验证的测试假设：本报告仅基于参考素材的结构拆解，无投放数据与历史图证据支撑。",
   "lab.report.graphNoneTitle": "仅基于参考素材的结构拆解",

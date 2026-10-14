@@ -28,6 +28,7 @@ import type {
   UploadResponse,
 } from "@shared";
 import { apiClient } from "./client";
+import { getLang } from "../lib/i18n";
 
 /** Unwrap the { success, data, message } envelope; throws a readable Error on failure. */
 async function unwrap<T>(promise: Promise<AxiosResponse<ApiResponse<T>>>): Promise<T> {
@@ -213,6 +214,11 @@ export function updateAsset(id: string, body: UpdateAssetRequest): Promise<Asset
   return unwrap(apiClient.put<ApiResponse<AssetDetail>>(`/assets/${id}`, body));
 }
 
+/** DELETE /assets/{id} — 永久删除素材及其分析结果、图谱节点与文件（不可恢复）。 */
+export function deleteAsset(assetId: string): Promise<null> {
+  return unwrap(apiClient.delete<ApiResponse<null>>(`/assets/${assetId}`));
+}
+
 // --- Analysis ----------------------------------------------------------------
 
 export function runAnalysis(assetId: string): Promise<AnalysisResult> {
@@ -337,9 +343,11 @@ export function getLabAnalysis(assetId: string): Promise<LabAnalysisResponse> {
 }
 
 /** POST /lab/diagnoses — 同步跑定性诊断（推理型端点常态 1–3 分钟，重试场景翻倍），
- *  超时与 nginx proxy_read_timeout（600s）对齐。 */
+ *  超时与 nginx proxy_read_timeout（600s）对齐。
+ *  报告语言默认跟随界面语言；调用方显式传 lang 时以调用方为准。 */
 export function createLabDiagnosis(body: CreateDiagnosisRequest): Promise<LabDiagnosis> {
+  const payload: CreateDiagnosisRequest = { lang: getLang(), ...body };
   return unwrap(
-    apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", body, { timeout: 600000 }),
+    apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", payload, { timeout: 600000 }),
   );
 }

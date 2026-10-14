@@ -451,6 +451,15 @@ export const en: Record<string, string> = {
   "assets.list.emptySearch": "No assets match your search.",
   "assets.list.empty": "No assets yet — upload some first.",
   "assets.list.refreshing": "Refreshing…",
+  "assets.list.delete": "Delete",
+  "assets.list.deleteTitle": "Permanently delete this asset (cannot be undone)",
+  "assets.list.deleteConfirmTitle": "Delete asset",
+  "assets.list.deleteConfirmDesc":
+    "This permanently deletes “{name}” together with its analysis results, graph nodes, and files. This cannot be undone.",
+  "assets.list.deleteCancel": "Cancel",
+  "assets.list.deleteConfirm": "Delete permanently",
+  "assets.list.deleting": "Deleting…",
+  "assets.list.deleteFailed": "Delete failed",
 
   // --- assets: detail page ---
   "assets.detail.loadFailed": "Failed to load asset",
@@ -556,6 +565,8 @@ export const en: Record<string, string> = {
   "lab.report.goSettings": "Configure in Settings →",
   "lab.report.stale":
     "The taxonomy / prompt has been upgraded — this report is on an older version. Re-run to refresh it.",
+  "lab.report.langMismatch":
+    "Report language differs from the UI language — click \"Re-run diagnosis\" to regenerate.",
   "lab.report.referenceOnly":
     "Unverified test hypothesis: this report is a structural breakdown of the reference only, with no performance data or historical graph evidence behind it.",
   "lab.report.graphNoneTitle": "Structural breakdown of the reference only",

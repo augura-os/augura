@@ -461,6 +461,8 @@ export interface LabAudience {
 export interface CreateDiagnosisRequest {
   asset_id: string;
   audience?: LabAudience;
+  /** 报告输出语言；缺省时前端注入当前界面语言（后端兜底 zh）。 */
+  lang?: "zh" | "en";
 }
 
 /** 观察层（analysis_results 字段照实装配；分析未就绪时整体为 null）。 */
@@ -545,6 +547,8 @@ export interface LabDiagnosis {
   evidence_label: string;
   prompt_version: string;
   engine_version: string;
+  /** 报告输出语言（"zh"/"en"）；存量旧行可能缺该字段，前端按 "zh" 兜底 */
+  lang: string;
   created_at: string;
 }
 

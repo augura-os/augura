@@ -12,17 +12,18 @@ import uuid
 from typing import cast
 
 from fastapi import APIRouter
+from graph import make_node_id
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import DbDep, SettingsDep
 from app.config import Settings
 from app.exceptions import ApiError
-from app.models import Creative, SplitRuling
+from app.models import Creative, CreativeVariant, SplitRuling, Tag, TagAssignment
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import load_mirror, rebuild_mirror
-from app.repositories.tags import TagRepository
+from app.repositories.tags import COMPETITOR_REFERENCE_TAG, TagRepository
 from app.schemas.common import Envelope, ok
 from app.schemas.graph import (
     GraphEdgeOut,
@@ -83,25 +84,97 @@ def _annotate_lifecycle(db: Session, graph: GraphOut) -> GraphOut:
     return graph
 
 
-def _current_graph(db: Session, settings: Settings) -> GraphOut:
-    """Neo4j first; SQL mirror fallback (contract §6)."""
+def _filter_competitor(db: Session, graph: GraphOut) -> GraphOut:
+    """从 GraphOut 剔除竞品参考子图（GET /graph 默认视图）。
+
+    Lab 竞品参考素材（sticky 标签 competitor-reference）与自有素材走同一条
+    ingest 管线进图，但只服务诊断对照，不应污染图谱主视图：删其
+    asset/variant 节点与任一端相连的边；variant 被删光的 creative 一并删；
+    competitor-reference Tag 节点若因此无边可连也删。
+    库内无竞品参考时整体跳过（零开销）。
+    """
+    tagged = db.execute(
+        select(Tag.id, TagAssignment.asset_id)
+        .join(TagAssignment, TagAssignment.tag_id == Tag.id)
+        .where(Tag.name == COMPETITOR_REFERENCE_TAG)
+    ).all()
+    if not tagged:
+        return graph
+    tag_id = tagged[0].id  # Tag.name 唯一，所有行同属一个 Tag
+    asset_ids = {row.asset_id for row in tagged}
+
+    variant_rows = db.execute(
+        select(CreativeVariant.id, CreativeVariant.creative_id).where(
+            CreativeVariant.asset_id.in_(asset_ids)
+        )
+    ).all()
+    removed_variant_ids = {row.id for row in variant_rows}
+    removed_node_ids = {make_node_id("asset", asset_id) for asset_id in asset_ids}
+    removed_node_ids |= {
+        make_node_id("variant", variant_id) for variant_id in removed_variant_ids
+    }
+
+    # variant 全被删光的 creative 一并剔除（混族时保留仍有自有 variant 的族）
+    affected_creative_ids = {row.creative_id for row in variant_rows}
+    if affected_creative_ids:
+        surviving_creative_ids = {
+            row[0]
+            for row in db.execute(
+                select(CreativeVariant.creative_id).where(
+                    CreativeVariant.creative_id.in_(affected_creative_ids),
+                    CreativeVariant.id.notin_(removed_variant_ids),
+                )
+            ).all()
+        }
+        removed_node_ids |= {
+            make_node_id("creative", creative_id)
+            for creative_id in affected_creative_ids - surviving_creative_ids
+        }
+
+    graph.nodes = [node for node in graph.nodes if node.id not in removed_node_ids]
+    graph.edges = [
+        edge
+        for edge in graph.edges
+        if edge.source not in removed_node_ids and edge.target not in removed_node_ids
+    ]
+    # 竞品 Tag 节点的 HAS_TAG 边全随 asset 删除后即成孤儿，一并剔除
+    tag_node_id = make_node_id("tag", tag_id)
+    if not any(
+        edge.source == tag_node_id or edge.target == tag_node_id
+        for edge in graph.edges
+    ):
+        graph.nodes = [node for node in graph.nodes if node.id != tag_node_id]
+    return graph
+
+
+def _current_graph(
+    db: Session, settings: Settings, *, include_competitor: bool = False
+) -> GraphOut:
+    """Neo4j first; SQL mirror fallback (contract §6).
+
+    两条读取路径在出口汇聚：统一补 lifecycle_state；默认剔除竞品参考子图
+    （``include_competitor=True`` 时全量返回，供 Lab 对照视图用）。
+    """
     try:
         data = graph_sync.get_graph_repository(settings).read_graph()
-        return _annotate_lifecycle(
-            db,
-            GraphOut(
-                nodes=[GraphNodeOut(**node) for node in data["nodes"]],
-                edges=[GraphEdgeOut(**edge) for edge in data["edges"]],
-            ),
+        graph = GraphOut(
+            nodes=[GraphNodeOut(**node) for node in data["nodes"]],
+            edges=[GraphEdgeOut(**edge) for edge in data["edges"]],
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Neo4j 读取失败，回退 SQL 镜像: %s", exc)
-        return _annotate_lifecycle(db, _mirror_graph(db))
+        graph = _mirror_graph(db)
+    graph = _annotate_lifecycle(db, graph)
+    if not include_competitor:
+        graph = _filter_competitor(db, graph)
+    return graph
 
 
 @router.get("/graph", response_model=Envelope[GraphOut])
-def get_graph(db: DbDep, settings: SettingsDep) -> Envelope[GraphOut]:
-    return ok(_current_graph(db, settings))
+def get_graph(
+    db: DbDep, settings: SettingsDep, include_competitor: bool = False
+) -> Envelope[GraphOut]:
+    return ok(_current_graph(db, settings, include_competitor=include_competitor))
 
 
 @router.post("/graph/merge", response_model=Envelope[GraphOut])

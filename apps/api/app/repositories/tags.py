@@ -10,9 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.models import Tag, TagAssignment
 
+# 竞品参考来源标签名（/lab/references 入口统一打标；图谱过滤与聚类隔离
+# 共用此常量，避免各处散落字面量）。
+COMPETITOR_REFERENCE_TAG: Final = "competitor-reference"
+
 # 来源标记标签：人工/入口赋予的「这素材从哪来」事实，pipeline 自动打标签
 # （replace 语义）不得抹掉——抹掉会让竞品参考混入自有素材池无法区分。
-STICKY_SOURCE_TAGS: Final = frozenset({"competitor-reference"})
+STICKY_SOURCE_TAGS: Final = frozenset({COMPETITOR_REFERENCE_TAG})
 
 
 def normalize_tag_names(names: Sequence[str]) -> list[str]:

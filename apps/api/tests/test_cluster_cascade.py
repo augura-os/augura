@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import Creative, CreativeAsset, CreativeVariant, EditLog
+from app.repositories.creatives import VariantRepository
 from app.repositories.settings import SettingsRepository
+from app.repositories.tags import TagRepository
 from app.services import pipeline
 from app.services.pipeline import _cluster
 from app.services.variant_diff import VariantDiff, VideoMeta
@@ -453,3 +455,75 @@ class TestClusterGate:
         # 即便视频测量会对齐 0.99，总闸关闭时也不测量、不归入
         assert creative.id != existing.id
         assert _cluster_logs(db_session, existing.id) == []
+
+
+class TestCompetitorIsolation:
+    """竞品参考隔离（Creative Lab）：
+
+    - 带 competitor-reference 标签的 asset 永远独立成族：跳过匹配直接新建，
+      不进任何已有家族；
+    - 自有 asset 的候选族排除含竞品参考 variant 的家族，竞品家族不污染
+      自有素材的归入判定。
+
+    时序保证：sticky 标签在 /lab/references 请求内写入，worker 之后异步
+    跑分析管线时必能读到（重分析由 _set_tags_preserving_sources 保留）。
+    """
+
+    @staticmethod
+    def _tag_competitor(db: Session, asset_id: str) -> None:
+        TagRepository(db).set_asset_tags(asset_id, ["competitor-reference"])
+
+    def test_competitor_asset_creates_own_family(self, db_session: Session) -> None:
+        owned = _creative_with_video(db_session, name="shared-name-family")
+        asset = _new_asset(db_session)
+        self._tag_competitor(db_session, asset.id)
+
+        # 名字/文本与自有家族完全一致——不做隔离的话文本分 1.0 必自动归入
+        creative, previous = _cluster(
+            db_session, asset, "shared-name-family", None, "shared-name-family"
+        )
+
+        assert creative.id != owned.id
+        assert previous is None
+        variant = VariantRepository(db_session).get_by_asset(asset.id)
+        assert variant is not None and variant.creative_id == creative.id
+        # 自有家族未被污染：仍只有原来 1 个 variant，无自动归入日志
+        assert len(VariantRepository(db_session).list_by_creative(owned.id)) == 1
+        assert _cluster_logs(db_session, owned.id) == []
+
+    def test_owned_asset_excludes_competitor_family(
+        self, db_session: Session
+    ) -> None:
+        competitor = _creative_with_video(db_session, name="comp-lookalike-family")
+        comp_variant = VariantRepository(db_session).list_by_creative(competitor.id)[0]
+        self._tag_competitor(db_session, comp_variant.asset_id)
+
+        asset = _new_asset(db_session)
+        # 文本与竞品家族完全一致——候选不排除的话必自动归入竞品家族
+        creative, _ = _cluster(
+            db_session, asset, "comp-lookalike-family", None, "comp-lookalike-family"
+        )
+
+        assert creative.id != competitor.id
+        # 竞品家族未被混入自有素材
+        members = VariantRepository(db_session).list_by_creative(competitor.id)
+        assert [v.id for v in members] == [comp_variant.id]
+        assert _cluster_logs(db_session, competitor.id) == []
+
+    def test_owned_asset_still_attaches_to_owned_family(
+        self, db_session: Session
+    ) -> None:
+        # 竞品家族文本分更高（1.0），自有家族 0.75：不排除竞品时新素材会
+        # 错归竞品家族；排除后正常归入自有家族（隔离不破坏正常 attach）
+        competitor = _creative_with_video(db_session, name="iso-target-family")
+        comp_variant = VariantRepository(db_session).list_by_creative(competitor.id)[0]
+        self._tag_competitor(db_session, comp_variant.asset_id)
+        owned = _creative_with_video(db_session, name="iso-target-family-extended")
+
+        asset = _new_asset(db_session)
+        creative, _ = _cluster(
+            db_session, asset, "iso-target-family", None, "iso-target-family"
+        )
+
+        assert creative.id == owned.id
+        assert _cluster_logs(db_session, competitor.id) == []

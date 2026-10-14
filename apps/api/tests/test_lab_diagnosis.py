@@ -123,12 +123,13 @@ class TestSuccess:
         assert row.observation_snapshot["summary"] == "虚构观察层：舰队重建素材"
         assert row.observation_snapshot["tags"] == ["星海", "建造"]
         assert row.audience_context == {"region": "FAKE", "lang": "zh"}
+        assert row.lang == "zh"
         assert row.product_facts_snapshot is None  # 未配置 product_facts
         assert len(llm_mocks) == 1
         assert llm_mocks[0]["max_tokens"] == lab_diagnosis.DIAGNOSIS_MAX_TOKENS
         # 落库可读回
         stored = CreativeDiagnosisRepository(db_session).get_current(
-            asset.id, LAB_PROMPT_VERSION
+            asset.id, LAB_PROMPT_VERSION, "zh"
         )
         assert stored is not None and stored.id == row.id
 
@@ -182,7 +183,7 @@ class TestRetry:
         assert len(calls) == 2  # 首次 + 重试一次
         assert (
             CreativeDiagnosisRepository(db_session).get_current(
-                asset.id, LAB_PROMPT_VERSION
+                asset.id, LAB_PROMPT_VERSION, "zh"
             )
             is None
         )
@@ -304,6 +305,7 @@ class TestDiagnosisLang:
         assert "8. 输出语言" not in system
         # 无受众时快照也至少留 lang
         assert row.audience_context == {"lang": "en"}
+        assert row.lang == "en"
 
     def test_default_lang_keeps_chinese_rule8(
         self, db_session: Session, llm_mocks: list
@@ -319,6 +321,29 @@ class TestDiagnosisLang:
         assert "8. Output language" not in system
         # lang 并入受众快照，不覆盖既有受众字段
         assert row.audience_context == {"region": "FAKE", "lang": "zh"}
+        assert row.lang == "zh"
+
+    def test_zh_and_en_rows_coexist(
+        self, db_session: Session, llm_mocks: list
+    ) -> None:
+        """同 asset 同 prompt 版本下跑 zh 再跑 en：两行共存，互不覆盖。"""
+        asset = _seed_analyzed_asset(db_session, "FAKE-m1b-lang-coexist.mp4")
+
+        zh = lab_diagnosis.run_diagnosis(
+            db_session, Settings(), asset_id=asset.id, audience=None, lang="zh"
+        )
+        en = lab_diagnosis.run_diagnosis(
+            db_session, Settings(), asset_id=asset.id, audience=None, lang="en"
+        )
+
+        assert zh.id != en.id
+        repo = CreativeDiagnosisRepository(db_session)
+        stored_zh = repo.get_current(asset.id, LAB_PROMPT_VERSION, "zh")
+        stored_en = repo.get_current(asset.id, LAB_PROMPT_VERSION, "en")
+        assert stored_zh is not None and stored_zh.lang == "zh"
+        assert stored_en is not None and stored_en.lang == "en"
+        assert stored_en.audience_context == {"lang": "en"}
+        assert stored_zh.audience_context == {"lang": "zh"}
 
 
 class TestPreconditions:

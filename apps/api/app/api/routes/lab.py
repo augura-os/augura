@@ -2,15 +2,15 @@
 
 - ``POST /lab/references``：与 /upload 同一 ingest 核心，新建 asset 全部
   打 competitor-reference 来源标记（sticky，pipeline 重分析不抹）。
-- ``GET /lab/analysis/{asset_id}``：观察层 + 当前 prompt 版本诊断 +
-  stale 标记 + 图证据 + product-facts 的只读视图。
+- ``GET /lab/analysis/{asset_id}?lang=``：观察层 + 当前 prompt 版本该语言
+  诊断 + stale 标记（按语言维度）+ 图证据 + product-facts 的只读视图。
 - ``POST /lab/diagnoses``：同步跑定性诊断并落库（幂等 upsert）。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, UploadFile
 
@@ -44,11 +44,9 @@ COMPETITOR_REFERENCE_TAG = "competitor-reference"
 
 
 def _diagnosis_out(row: CreativeDiagnosis) -> LabDiagnosisOut:
-    # lang 存于 audience_context 快照；旧行无此键时默认 zh（兼容历史数据）
-    audience = row.audience_context or {}
     return LabDiagnosisOut(
         asset_id=row.asset_id,
-        lang=str(audience.get("lang", "zh")),
+        lang=row.lang,
         output=row.output,
         evidence_label=row.evidence_label,
         prompt_version=row.prompt_version,
@@ -96,14 +94,18 @@ def upload_references(
 
 
 @router.get("/lab/analysis/{asset_id}", response_model=Envelope[LabAnalysisView])
-def get_lab_analysis(db: DbDep, asset_id: str) -> Envelope[LabAnalysisView]:
+def get_lab_analysis(
+    db: DbDep, asset_id: str, lang: Literal["zh", "en"] = "zh"
+) -> Envelope[LabAnalysisView]:
     asset = AssetRepository(db).get(asset_id)
     if asset is None:
         raise _asset_not_found(asset_id)
     analysis = AnalysisRepository(db).get_by_asset(asset.id)
     diagnosis_repo = CreativeDiagnosisRepository(db)
-    current = diagnosis_repo.get_current(asset.id, LAB_PROMPT_VERSION)
-    latest = diagnosis_repo.get_latest(asset.id)
+    # 报告按 (asset, prompt_version, lang) 分行：切语言读对应语言的行；
+    # 该语言无任何行时 diagnosis=None 且 stale=False（前端自动生成）
+    current = diagnosis_repo.get_current(asset.id, LAB_PROMPT_VERSION, lang)
+    latest = diagnosis_repo.get_latest(asset.id, lang)
     return ok(
         LabAnalysisView(
             asset_id=asset.id,

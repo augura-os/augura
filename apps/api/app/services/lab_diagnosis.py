@@ -4,7 +4,7 @@
 LLM（lab_prompts 诊断 prompt，max_tokens 见 DIAGNOSIS_MAX_TOKENS）→
 lab_validate 校验（非法输出重试一次，仍非法则抛错不写库）→
 evidence_label 服务端钳制 → creative_diagnoses 按
-(asset_id, prompt_version) 幂等 upsert。
+(asset_id, prompt_version, lang) 幂等 upsert。
 
 业务异常由路由层映状态码：asset 缺失 404 / 观察层未就绪 409 /
 AI key 未配置 409 / 诊断生成失败 502。
@@ -119,8 +119,9 @@ def run_diagnosis(
 ) -> CreativeDiagnosis:
     """跑一条素材的定性诊断并幂等落库，返回落库行（flush，不 commit）。
 
-    ``lang`` 只切换诊断 prompt 第 8 条输出语言铁律（zh/en），随
-    audience_context 快照落库（读出侧按此回填 LabDiagnosisOut.lang）。
+    ``lang`` 只切换诊断 prompt 第 8 条输出语言铁律（zh/en），既写入
+    creative_diagnoses.lang 列（upsert 键之一），也并入 audience_context
+    快照（复盘"当时按哪种语言跑的"）。
     """
     asset = AssetRepository(db).get(asset_id)
     if asset is None:
@@ -185,9 +186,10 @@ def run_diagnosis(
     return CreativeDiagnosisRepository(db).upsert(
         asset.id,
         prompt_version=LAB_PROMPT_VERSION,
+        lang=lang,
         observation_snapshot=observation,
         product_facts_snapshot=product_facts,
-        # lang 并入受众快照：无受众时也至少留 {"lang": ...}，供读出侧回填
+        # lang 并入受众快照留痕（读出侧以 lang 列为准，双写不冲突）
         audience_context={**(audience or {}), "lang": lang},
         output=output,
         evidence_label=str(output["evidence_label"]),

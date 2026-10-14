@@ -98,7 +98,8 @@ def _unique_constraint_columns(conn) -> list[str]:
 
 
 def test_0021_table_structure(migration_url: str) -> None:
-    _alembic("upgrade", "head", migration_url)
+    # 钉在 0021 本版：0022 起该唯一约束被 (asset_id, prompt_version, lang) 取代
+    _alembic("upgrade", "0021_creative_diagnoses", migration_url)
     engine = create_engine(migration_url)
     with engine.connect() as conn:
         assert KEY_COLUMNS <= _table_columns(conn)

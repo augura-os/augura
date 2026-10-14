@@ -238,7 +238,7 @@ class TestCreateDiagnosis:
         assert data["created_at"]
 
         stored = CreativeDiagnosisRepository(db_session).get_current(
-            asset.id, LAB_PROMPT_VERSION
+            asset.id, LAB_PROMPT_VERSION, "zh"
         )
         assert stored is not None
         assert stored.audience_context == {"region": "FAKE", "age": "18-24", "lang": "zh"}
@@ -287,9 +287,10 @@ class TestDiagnosisLang:
         assert "8. Output language: except enum ids" in systems[0]
         assert "8. 输出语言" not in systems[0]
         stored = CreativeDiagnosisRepository(db_session).get_current(
-            asset.id, LAB_PROMPT_VERSION
+            asset.id, LAB_PROMPT_VERSION, "en"
         )
         assert stored is not None
+        assert stored.lang == "en"
         assert stored.audience_context == {"lang": "en"}
 
     def test_default_lang_keeps_chinese_rule8(
@@ -317,54 +318,116 @@ class TestDiagnosisLang:
         assert response.status_code == 400
         assert response.json()["code"] == "validation_error"
 
+    def test_post_zh_then_en_coexist_and_get_returns_each_lang(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        # 同 asset 同 prompt 版本：先 zh 后 en 两行共存，GET 按 lang 各取各的
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-lang-both.mp4")
+        _capture_llm(monkeypatch)
+
+        resp_zh = api_client.post("/lab/diagnoses", json={"asset_id": asset.id})
+        resp_en = api_client.post(
+            "/lab/diagnoses", json={"asset_id": asset.id, "lang": "en"}
+        )
+        assert resp_zh.status_code == 200
+        assert resp_en.status_code == 200
+
+        repo = CreativeDiagnosisRepository(db_session)
+        assert repo.get_current(asset.id, LAB_PROMPT_VERSION, "zh") is not None
+        assert repo.get_current(asset.id, LAB_PROMPT_VERSION, "en") is not None
+
+        view_zh = api_client.get(f"/lab/analysis/{asset.id}").json()["data"]
+        assert view_zh["diagnosis"]["lang"] == "zh"
+        view_en = api_client.get(f"/lab/analysis/{asset.id}?lang=en").json()["data"]
+        assert view_en["diagnosis"]["lang"] == "en"
+
 
 class TestAnalysisViewDiagnosisLang:
-    """GET /lab/analysis 的 diagnosis.lang：从 audience_context 快照回填。"""
+    """GET /lab/analysis?lang= 的诊断按语言取行：lang 列是 upsert 键之一。"""
 
     def _seed_diagnosis(
-        self, db: Session, asset_id: str, audience_context: dict | None
+        self,
+        db: Session,
+        asset_id: str,
+        *,
+        lang: str,
+        prompt_version: str = LAB_PROMPT_VERSION,
     ) -> None:
         CreativeDiagnosisRepository(db).upsert(
             asset_id,
-            prompt_version=LAB_PROMPT_VERSION,
+            prompt_version=prompt_version,
+            lang=lang,
             observation_snapshot={"summary": "虚构观察层"},
             output=_valid_output(),
             evidence_label="reference_only",
             engine_version="auto:fake-vision-v1",
-            audience_context=audience_context,
+            audience_context={"lang": lang},
         )
 
-    def test_en_snapshot_returns_en(
+    def test_lang_en_returns_en_row(
         self, api_client: TestClient, db_session: Session
     ) -> None:
         asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-en.mp4")
-        self._seed_diagnosis(db_session, asset.id, {"lang": "en"})
+        self._seed_diagnosis(db_session, asset.id, lang="en")
+
+        response = api_client.get(f"/lab/analysis/{asset.id}?lang=en")
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["diagnosis"]["lang"] == "en"
+        assert data["diagnosis_stale"] is False
+
+    def test_lang_without_row_returns_none_and_not_stale(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 只有 zh 行：请求 en 时 diagnosis=None 且 stale=False（前端自动生成）
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-miss.mp4")
+        self._seed_diagnosis(db_session, asset.id, lang="zh")
+
+        response = api_client.get(f"/lab/analysis/{asset.id}?lang=en")
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["diagnosis"] is None
+        assert data["diagnosis_stale"] is False
+
+    def test_default_lang_returns_zh_row(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-zh.mp4")
+        self._seed_diagnosis(db_session, asset.id, lang="zh")
+        self._seed_diagnosis(db_session, asset.id, lang="en")
 
         response = api_client.get(f"/lab/analysis/{asset.id}")
 
         assert response.status_code == 200
-        assert response.json()["data"]["diagnosis"]["lang"] == "en"
+        data = response.json()["data"]
+        assert data["diagnosis"]["lang"] == "zh"
+        assert data["diagnosis_stale"] is False
 
-    def test_legacy_row_without_lang_defaults_zh(
+    def test_stale_scoped_to_lang(
         self, api_client: TestClient, db_session: Session
     ) -> None:
-        # 旧行：audience_context 有受众但无 lang 键
+        # en 只有旧 prompt 版本行：?lang=en → stale=True；默认 zh 无行 → None/False
         asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-old.mp4")
-        self._seed_diagnosis(db_session, asset.id, {"region": "FAKE"})
+        self._seed_diagnosis(
+            db_session, asset.id, lang="en", prompt_version="lab-v0.0.0-legacy"
+        )
 
-        response = api_client.get(f"/lab/analysis/{asset.id}")
+        response_en = api_client.get(f"/lab/analysis/{asset.id}?lang=en")
+        data_en = response_en.json()["data"]
+        assert data_en["diagnosis"] is None  # 当前版本无 en 行
+        assert data_en["diagnosis_stale"] is True
 
-        assert response.status_code == 200
-        assert response.json()["data"]["diagnosis"]["lang"] == "zh"
+        response_zh = api_client.get(f"/lab/analysis/{asset.id}")
+        data_zh = response_zh.json()["data"]
+        assert data_zh["diagnosis"] is None
+        assert data_zh["diagnosis_stale"] is False
 
-    def test_legacy_row_without_audience_defaults_zh(
+    def test_invalid_lang_rejected_400(
         self, api_client: TestClient, db_session: Session
     ) -> None:
-        # 旧行：audience_context 整列为 NULL
-        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-null.mp4")
-        self._seed_diagnosis(db_session, asset.id, None)
-
-        response = api_client.get(f"/lab/analysis/{asset.id}")
-
-        assert response.status_code == 200
-        assert response.json()["data"]["diagnosis"]["lang"] == "zh"
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-bad.mp4")
+        response = api_client.get(f"/lab/analysis/{asset.id}?lang=fr")
+        assert response.status_code == 400
+        assert response.json()["code"] == "validation_error"

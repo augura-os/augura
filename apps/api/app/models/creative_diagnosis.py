@@ -5,9 +5,10 @@ product_facts_snapshot / audience_context 是诊断输入快照（写完冻结�
 可复盘"当时看到了什么"），output 是六要素诊断输出（结构见
 services/lab_prompts.DIAGNOSIS_SCHEMA）。
 
-(asset_id, prompt_version) 唯一 = 幂等 upsert 键：同素材同 prompt 版本
-重诊断覆盖写（不堆行），prompt 升级（services/lab_prompts
-LAB_PROMPT_VERSION bump）产生新行，旧版本行保留可回归对比。
+(asset_id, prompt_version, lang) 唯一 = 幂等 upsert 键：同素材同 prompt
+版本同语言重诊断覆盖写（不堆行），prompt 升级（services/lab_prompts
+LAB_PROMPT_VERSION bump）或换语言各起新行，旧行保留可回归对比。lang
+（zh/en）独立成列——报告语言跟随界面语言，切语言读对应行。
 """
 
 from __future__ import annotations
@@ -47,11 +48,18 @@ class CreativeDiagnosis(TimestampMixin, Base):
     evidence_label: Mapped[str] = mapped_column(String(32), nullable=False)
     # 诊断出自哪版 prompt（services/lab_prompts.LAB_PROMPT_VERSION）
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 报告语言（zh/en）：upsert 键之一，同素材同版本按语言各存一份
+    lang: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="zh", server_default="zh"
+    )
     # 产出诊断的引擎（格式同 analysis_results.engine_version）
     engine_version: Mapped[str] = mapped_column(String(128), nullable=False, default="")
 
     __table_args__ = (
         UniqueConstraint(
-            "asset_id", "prompt_version", name="uq_creative_diagnoses_asset_prompt"
+            "asset_id",
+            "prompt_version",
+            "lang",
+            name="uq_creative_diagnoses_asset_prompt_lang",
         ),
     )

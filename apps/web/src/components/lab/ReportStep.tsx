@@ -16,8 +16,9 @@ interface ReportStepProps {
   session: LabSession;
 }
 
-/** 自动诊断防重集（按 assetId）：StrictMode dev 双发 effect、切步来回导致
- *  remount 时 mutation 状态会重置，模块级 key 保证同一 asset 无重复在途诊断。 */
+/** 自动诊断防重集（按 assetId:lang）：StrictMode dev 双发 effect、切步来回导致
+ *  remount 时 mutation 状态会重置，模块级 key 保证同一 asset 同一语言无重复在途诊断；
+ *  key 含 lang 才能允许「zh 生成中切 en 触发 en」。 */
 const inflightDiagnoses = new Set<string>();
 
 /** 报告步：轮询观察层 → 触发/重跑定性诊断 → 渲染六要素报告。
@@ -25,21 +26,22 @@ const inflightDiagnoses = new Set<string>();
  *  reference_only 顶部横幅；product_facts 为空给 Settings 引导卡。 */
 export function ReportStep({ session }: ReportStepProps) {
   const t = useT();
-  const { data, isLoading, isError, error } = useLabAnalysis(session.assetId);
+  // lang 进 queryKey：语言切换 → useT 重渲染 → queryKey 变 → 自动按新语言拉取
+  const { data, isLoading, isError, error } = useLabAnalysis(session.assetId, getLang());
   const diagnosisMutation = useCreateDiagnosis();
 
   /** 触发诊断（自动/手动共用同一 mutate，body 一致）。仅失败时放行重试——
    *  成功则保留 key 直到 invalidate 后的 refetch 带回诊断，否则缓存陈旧
    *  窗口内（含 remount）会重复发起一次昂贵的 LLM 调用。 */
   const runDiagnosis = () => {
-    const assetId = session.assetId;
-    if (inflightDiagnoses.has(assetId)) return;
-    inflightDiagnoses.add(assetId);
+    const key = `${session.assetId}:${getLang()}`;
+    if (inflightDiagnoses.has(key)) return;
+    inflightDiagnoses.add(key);
     diagnosisMutation.mutate(
-      { asset_id: assetId, audience: session.audience },
+      { asset_id: session.assetId, audience: session.audience },
       {
         onSettled: (_diagnosis, mutationError) => {
-          if (mutationError) inflightDiagnoses.delete(assetId);
+          if (mutationError) inflightDiagnoses.delete(key);
         },
       },
     );
@@ -111,8 +113,6 @@ export function ReportStep({ session }: ReportStepProps) {
   const factsEmpty = Object.keys(data.product_facts ?? {}).length === 0;
   const diagnosisError = diagnosisMutation.isError ? diagnosisMutation.error : null;
   const keyMissing = apiErrorCode(diagnosisError) === "ai_key_not_configured";
-  // 报告语言与界面语言不一致（存量诊断可能无 lang 字段，按 zh 兜底）
-  const langMismatch = diagnosis ? (diagnosis.lang ?? "zh") !== getLang() : false;
 
   const diagnosisActions = (
     <div className="flex flex-wrap items-center gap-3">
@@ -154,12 +154,6 @@ export function ReportStep({ session }: ReportStepProps) {
         </div>
       ) : null}
 
-      {langMismatch ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {t("lab.report.langMismatch")}
-        </div>
-      ) : null}
-
       {/* 证据诚实区：null 只给降级文案（不出数字），非 null 显示真实相似数 */}
       {data.graph_evidence ? (
         <div className="rounded-md border border-[#e5e5e5] bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
@@ -189,7 +183,7 @@ export function ReportStep({ session }: ReportStepProps) {
 
       {diagnosis ? (
         <>
-          {data.diagnosis_stale || langMismatch ? diagnosisActions : null}
+          {data.diagnosis_stale ? diagnosisActions : null}
           <DiagnosisReport diagnosis={diagnosis} />
         </>
       ) : (

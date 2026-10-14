@@ -8,7 +8,7 @@ import { ReportStep } from "../components/lab/ReportStep";
 import { loadLabSession, saveLabSession, type LabSession } from "../components/lab/labSession";
 import { useLabAnalysis } from "../hooks/useLab";
 import { useSettings } from "../hooks/useSettings";
-import { useT } from "../lib/i18n";
+import { getLang, useT } from "../lib/i18n";
 
 /** Creative Lab（M1）：参考 → 受众 → 定性报告 三步实装；
  *  方向 / Brief 为 M2 锁态占位。会话（asset + 受众）存 sessionStorage。 */
@@ -17,8 +17,9 @@ export default function LabPage() {
   const [session, setSessionState] = useState<LabSession | null>(loadLabSession);
   const [step, setStep] = useState<number>(session ? 2 : 0);
   const { data: settings } = useSettings();
-  // 会话存在即开始轮询分析状态（react-query 同 key 共享，ReportStep 复用缓存）
-  useLabAnalysis(session?.assetId ?? null);
+  // 会话存在即开始轮询分析状态（react-query 同 key 共享，ReportStep 复用缓存）；
+  // lang 进 queryKey——语言切换后本组件随 useT 重渲染，自动按新语言 refetch
+  useLabAnalysis(session?.assetId ?? null, getLang());
 
   const updateSession = (next: LabSession | null) => {
     setSessionState(next);

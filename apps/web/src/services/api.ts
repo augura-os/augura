@@ -28,7 +28,7 @@ import type {
   UploadResponse,
 } from "@shared";
 import { apiClient } from "./client";
-import { getLang } from "../lib/i18n";
+import { getLang, type Lang } from "../lib/i18n";
 
 /** Unwrap the { success, data, message } envelope; throws a readable Error on failure. */
 async function unwrap<T>(promise: Promise<AxiosResponse<ApiResponse<T>>>): Promise<T> {
@@ -337,9 +337,14 @@ export function uploadLabReference(
   );
 }
 
-/** GET /lab/analysis/{assetId} — 观察层 + 当前诊断 + 证据只读视图（轮询用）。 */
-export function getLabAnalysis(assetId: string): Promise<LabAnalysisResponse> {
-  return unwrap(apiClient.get<ApiResponse<LabAnalysisResponse>>(`/lab/analysis/${assetId}`));
+/** GET /lab/analysis/{assetId}?lang= — 观察层 + 当前诊断 + 证据只读视图（轮询用）。
+ *  诊断按 (asset, prompt_version, lang) 存储：该语言无行时 diagnosis=null。 */
+export function getLabAnalysis(assetId: string, lang: Lang): Promise<LabAnalysisResponse> {
+  return unwrap(
+    apiClient.get<ApiResponse<LabAnalysisResponse>>(`/lab/analysis/${assetId}`, {
+      params: { lang },
+    }),
+  );
 }
 
 /** POST /lab/diagnoses — 同步跑定性诊断（推理型端点常态 1–3 分钟，重试场景翻倍），

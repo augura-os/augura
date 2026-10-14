@@ -7,6 +7,14 @@ export const en: Record<string, string> = {
   "common.failedRetry": "Failed, please retry",
   "common.collapse": "Collapse",
   "common.commaSeparated": "(comma separated)",
+  "common.close": "Close",
+
+  // --- sidebar navigation ---
+  "nav.lab": "Lab",
+  "nav.graph": "Graph",
+  "nav.upload": "Upload",
+  "nav.assets": "Assets",
+  "nav.settings": "Settings",
 
   // --- metric / threshold / factor labels (keys mirror backend config) ---
   "metric.spend": "Spend",
@@ -461,6 +469,13 @@ export const en: Record<string, string> = {
   "assets.list.deleting": "Deleting…",
   "assets.list.deleteFailed": "Delete failed",
 
+  // --- assets: AI analysis status badge (StatusBadge, reused in several places) ---
+  "assets.status.pending": "Pending",
+  "assets.status.processing": "Processing",
+  "assets.status.completed": "Completed",
+  "assets.status.failed": "Failed",
+  "assets.status.none": "None",
+
   // --- assets: detail page ---
   "assets.detail.loadFailed": "Failed to load asset",
   "assets.detail.excelNote": "Excel file — parsed into performance data, no media preview.",
@@ -490,6 +505,13 @@ export const en: Record<string, string> = {
   "upload.maxSizeNote": "Maximum size per file: {n}.",
   "upload.skip.duplicate": "An asset with this filename already exists",
   "upload.warning.excel_overlap": "{filename}: overlaps {files} in the {date_min}~{date_max} window by {rows} rows — please dedupe to avoid double counting",
+  "upload.dropTitle": "Drop files here, or click to browse",
+  "upload.dropHint": "Video (mp4, mov) · Image (png, jpg, jpeg) · Facebook Excel (xlsx, xls)",
+  "upload.status.queued": "Queued",
+  "upload.status.uploading": "Uploading",
+  "upload.status.success": "Done",
+  "upload.status.skipped": "Skipped",
+  "upload.status.error": "Failed",
 
   // --- Creative Lab ---
   "lab.title": "Creative Lab",
@@ -565,8 +587,6 @@ export const en: Record<string, string> = {
   "lab.report.goSettings": "Configure in Settings →",
   "lab.report.stale":
     "The taxonomy / prompt has been upgraded — this report is on an older version. Re-run to refresh it.",
-  "lab.report.langMismatch":
-    "Report language differs from the UI language — click \"Re-run diagnosis\" to regenerate.",
   "lab.report.referenceOnly":
     "Unverified test hypothesis: this report is a structural breakdown of the reference only, with no performance data or historical graph evidence behind it.",
   "lab.report.graphNoneTitle": "Structural breakdown of the reference only",
@@ -692,6 +712,15 @@ export const en: Record<string, string> = {
   "lab.enum.evidence.performance_supported": "Performance-supported",
   "lab.enum.evidence.graph_supported": "Graph-supported",
   "lab.enum.evidence.reference_only": "Reference-only (unverified)",
+  "lab.enum.choice.正解": "Correct",
+  "lab.enum.choice.作死": "Fatal",
+
+  // --- graph legend ---
+  "graph.legend.dna": "DNA",
+  "graph.legend.creative": "Creative",
+  "graph.legend.variant": "Variant",
+  "graph.legend.asset": "Asset",
+  "graph.legend.tag": "Tag",
 
   // --- settings page ---
   "settings.title": "Settings",

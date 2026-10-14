@@ -7,6 +7,14 @@ export const zh: Record<string, string> = {
   "common.failedRetry": "失败，请重试",
   "common.collapse": "收起",
   "common.commaSeparated": "（逗号分隔）",
+  "common.close": "关闭",
+
+  // --- 侧边栏导航 ---
+  "nav.lab": "实验室",
+  "nav.graph": "图谱",
+  "nav.upload": "上传",
+  "nav.assets": "素材",
+  "nav.settings": "设置",
 
   // --- 指标 / 阈值 / 裂变因子标签（key 与后端配置一致） ---
   "metric.spend": "消耗",
@@ -432,7 +440,7 @@ export const zh: Record<string, string> = {
   "assets.list.colFilename": "文件名",
   "assets.list.colUploaded": "上传时间",
   "assets.list.colAiStatus": "AI 状态",
-  "assets.list.colCreative": "Creative",
+  "assets.list.colCreative": "创意家族",
   "assets.list.confidenceTitle": "AI 置信度 {pct}%，低于 70% — 建议人工复核",
   "assets.list.needsReview": "待复核",
   "assets.list.retry": "重试",
@@ -450,6 +458,13 @@ export const zh: Record<string, string> = {
   "assets.list.deleteConfirm": "确认删除",
   "assets.list.deleting": "删除中…",
   "assets.list.deleteFailed": "删除失败",
+
+  // --- 素材：AI 分析状态徽章（StatusBadge，多处复用） ---
+  "assets.status.pending": "排队中",
+  "assets.status.processing": "分析中",
+  "assets.status.completed": "已完成",
+  "assets.status.failed": "失败",
+  "assets.status.none": "未分析",
 
   // --- 素材：详情页 ---
   "assets.detail.loadFailed": "加载素材失败",
@@ -478,6 +493,13 @@ export const zh: Record<string, string> = {
   "upload.maxSizeNote": "单个文件大小上限 {n}。",
   "upload.skip.duplicate": "库中已存在同名素材",
   "upload.warning.excel_overlap": "{filename}：与 {files} 在 {date_min}~{date_max} 窗口重叠 {rows} 行，请核查清理以免重复计数",
+  "upload.dropTitle": "拖入文件，或点击选择",
+  "upload.dropHint": "视频（mp4, mov）· 图片（png, jpg, jpeg）· Facebook Excel（xlsx, xls）",
+  "upload.status.queued": "排队中",
+  "upload.status.uploading": "上传中",
+  "upload.status.success": "完成",
+  "upload.status.skipped": "已跳过",
+  "upload.status.error": "失败",
 
   // --- Creative Lab ---
   "lab.title": "创意实验室",
@@ -544,8 +566,6 @@ export const zh: Record<string, string> = {
   "lab.report.rerun": "重新诊断",
   "lab.report.goSettings": "去 Settings 配置 →",
   "lab.report.stale": "词表 / prompt 已升级，当前报告基于旧版本——可重新诊断获得新版本结论。",
-  "lab.report.langMismatch":
-    "报告语言与当前界面语言不一致——点击「重新诊断」生成当前语言版本。",
   "lab.report.referenceOnly":
     "未验证的测试假设：本报告仅基于参考素材的结构拆解，无投放数据与历史图证据支撑。",
   "lab.report.graphNoneTitle": "仅基于参考素材的结构拆解",
@@ -668,6 +688,15 @@ export const zh: Record<string, string> = {
   "lab.enum.evidence.performance_supported": "投放数据支持",
   "lab.enum.evidence.graph_supported": "历史图证据",
   "lab.enum.evidence.reference_only": "仅参考素材假设（未验证）",
+  "lab.enum.choice.正解": "正解",
+  "lab.enum.choice.作死": "作死",
+
+  // --- 图谱图例 ---
+  "graph.legend.dna": "DNA",
+  "graph.legend.creative": "创意",
+  "graph.legend.variant": "Variant",
+  "graph.legend.asset": "素材",
+  "graph.legend.tag": "标签",
 
   // --- 设置页 ---
   "settings.title": "设置",

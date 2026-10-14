@@ -126,7 +126,7 @@ export default function AssetListPage() {
                 <TableHead className="w-[72px]">{t("assets.list.colPreview")}</TableHead>
                 <TableHead>{t("assets.list.colFilename")}</TableHead>
                 <TableHead className="w-[180px]">{t("assets.list.colUploaded")}</TableHead>
-                <TableHead className="w-[130px]">{t("assets.list.colAiStatus")}</TableHead>
+                <TableHead className="w-[170px]">{t("assets.list.colAiStatus")}</TableHead>
                 <TableHead>{t("assets.list.colCreative")}</TableHead>
               </TableRow>
             </TableHeader>
@@ -179,7 +179,7 @@ export default function AssetListPage() {
                   </TableCell>
                   <TableCell className="text-neutral-500">{formatTime(asset.created_at)}</TableCell>
                   <TableCell>
-                    <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
                       <StatusBadge status={asset.analysis_status} />
                       {asset.analysis_status === "failed" ? (
                         <button
@@ -197,7 +197,7 @@ export default function AssetListPage() {
                                 ),
                             });
                           }}
-                          className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-50"
+                          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-50"
                         >
                           <RotateCcw className="h-3 w-3" />
                           {t("assets.list.retry")}
@@ -211,7 +211,7 @@ export default function AssetListPage() {
                           deleteAsset.reset();
                           setDeleteTarget(asset);
                         }}
-                        className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-red-50 hover:text-red-700"
+                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 transition hover:bg-red-50 hover:text-red-700"
                       >
                         <Trash2 className="h-3 w-3" />
                         {t("assets.list.delete")}

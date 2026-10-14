@@ -7,7 +7,7 @@ import { translate } from "./i18n";
  *
  * group 取值：hook_mechanism / form_tag / timeliness / opening_3s /
  * brand_implant / bridge_mode / b_narrative / b_ui / visual_route /
- * emotion_entry / spectrum / evidence
+ * emotion_entry / spectrum / evidence / choice（选择链：正解/作死）
  */
 export function labEnumLabel(group: string, id: string | null | undefined): string {
   if (!id) return "";

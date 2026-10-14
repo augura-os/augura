@@ -1,13 +1,14 @@
 import { CheckCircle2, FileIcon, Loader2, XCircle } from "lucide-react";
 import type { UploadItem } from "../../hooks/useUpload";
+import { useT } from "../../lib/i18n";
 import { Badge } from "../ui/badge";
 
-const STATUS_BADGE: Record<UploadItem["status"], { label: string; variant: "secondary" | "warning" | "success" | "destructive" }> = {
-  queued: { label: "Queued", variant: "secondary" },
-  uploading: { label: "Uploading", variant: "warning" },
-  success: { label: "Done", variant: "success" },
-  skipped: { label: "Skipped", variant: "secondary" },
-  error: { label: "Failed", variant: "destructive" },
+const STATUS_VARIANT: Record<UploadItem["status"], "secondary" | "warning" | "success" | "destructive"> = {
+  queued: "secondary",
+  uploading: "warning",
+  success: "success",
+  skipped: "secondary",
+  error: "destructive",
 };
 
 function formatSize(bytes: number): string {
@@ -16,11 +17,11 @@ function formatSize(bytes: number): string {
 }
 
 export function UploadFileList({ items }: { items: UploadItem[] }) {
+  const t = useT();
   if (items.length === 0) return null;
   return (
     <ul className="divide-y divide-[#e5e5e5] rounded-lg border border-[#e5e5e5] bg-white">
       {items.map((item) => {
-        const meta = STATUS_BADGE[item.status];
         return (
           <li key={item.id} className="flex items-center gap-3 px-4 py-3">
             {item.status === "uploading" ? (
@@ -49,7 +50,7 @@ export function UploadFileList({ items }: { items: UploadItem[] }) {
                 </div>
               ) : null}
             </div>
-            <Badge variant={meta.variant}>{meta.label}</Badge>
+            <Badge variant={STATUS_VARIANT[item.status]}>{t(`upload.status.${item.status}`)}</Badge>
           </li>
         );
       })}

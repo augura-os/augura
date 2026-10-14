@@ -31,12 +31,12 @@ import { cn } from "../lib/utils";
 import { useT } from "../lib/i18n";
 import type { GraphNodeType } from "@shared";
 
-const LEGEND: Array<{ type: GraphNodeType; label: string }> = [
-  { type: "dna", label: "DNA" },
-  { type: "creative", label: "Creative" },
-  { type: "variant", label: "Variant" },
-  { type: "asset", label: "Asset" },
-  { type: "tag", label: "Tag" },
+const LEGEND: Array<{ type: GraphNodeType; labelKey: string }> = [
+  { type: "dna", labelKey: "graph.legend.dna" },
+  { type: "creative", labelKey: "graph.legend.creative" },
+  { type: "variant", labelKey: "graph.legend.variant" },
+  { type: "asset", labelKey: "graph.legend.asset" },
+  { type: "tag", labelKey: "graph.legend.tag" },
 ];
 
 // 超过这个节点数认定为大图：不再 fitView 全图（会缩成细条），用固定初始视口
@@ -188,10 +188,10 @@ export default function CreativeGraphPage() {
         <div className="pointer-events-none absolute bottom-4 left-4 top-4 flex flex-col items-start gap-2">
           <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2">
           <div className="flex items-center gap-3">
-            {LEGEND.map(({ type, label }) => (
+            {LEGEND.map(({ type, labelKey }) => (
               <span key={type} className="flex items-center gap-1.5 text-xs text-neutral-600">
                 <span className={cn("h-2 w-2 rounded-full", NODE_DOT_CLASS[type])} />
-                {label}
+                {t(labelKey)}
               </span>
             ))}
           </div>

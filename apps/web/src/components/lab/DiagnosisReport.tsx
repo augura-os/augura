@@ -254,9 +254,9 @@ export function DiagnosisReport({ diagnosis }: DiagnosisReportProps) {
                     return (
                       <TableRow key={index}>
                         <TableCell className="text-sm">{beat.beat}</TableCell>
-                        <TableCell>
+                        <TableCell className="whitespace-nowrap">
                           <span className={good ? "text-emerald-600" : "text-red-600"}>
-                            {good ? "✅" : "❌"} {beat.choice}
+                            {good ? "✅" : "❌"} {labEnumLabel("choice", beat.choice)}
                           </span>
                         </TableCell>
                         <TableCell className="text-sm">{beat.feedback}</TableCell>

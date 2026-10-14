@@ -1,17 +1,19 @@
 import { NavLink } from "react-router-dom";
 import { FlaskConical, FolderOpen, Github, Network, Settings, Upload } from "lucide-react";
+import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 
 const navItems = [
-  { to: "/lab", label: "Lab", icon: FlaskConical, end: true },
-  { to: "/graph", label: "Graph", icon: Network, end: false },
-  { to: "/upload", label: "Upload", icon: Upload, end: false },
-  { to: "/assets", label: "Assets", icon: FolderOpen, end: false },
-  { to: "/settings", label: "Settings", icon: Settings, end: false },
+  { to: "/lab", labelKey: "nav.lab", icon: FlaskConical, end: true },
+  { to: "/graph", labelKey: "nav.graph", icon: Network, end: false },
+  { to: "/upload", labelKey: "nav.upload", icon: Upload, end: false },
+  { to: "/assets", labelKey: "nav.assets", icon: FolderOpen, end: false },
+  { to: "/settings", labelKey: "nav.settings", icon: Settings, end: false },
 ];
 
 /** Slim left sidebar navigation (§9 UI rules). */
 export function Sidebar() {
+  const t = useT();
   return (
     <aside className="flex w-20 shrink-0 flex-col items-center gap-1 border-r border-[#e5e5e5] bg-white py-4">
       <div className="mb-4 flex h-8 w-8 items-center justify-center rounded-md bg-neutral-900 text-white">
@@ -25,7 +27,7 @@ export function Sidebar() {
           <circle cx="90" cy="100" r="12" fill="currentColor" />
         </svg>
       </div>
-      {navItems.map(({ to, label, icon: Icon, end }) => (
+      {navItems.map(({ to, labelKey, icon: Icon, end }) => (
         <NavLink
           key={to}
           to={to}
@@ -40,7 +42,7 @@ export function Sidebar() {
           }
         >
           <Icon className="h-4 w-4" />
-          <span>{label}</span>
+          <span>{t(labelKey)}</span>
         </NavLink>
       ))}
       {/* 版权信息（LICENSE 条款 1b 要求保留，勿移除） */}

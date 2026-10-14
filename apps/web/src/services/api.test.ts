@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LabDiagnosis } from "@shared";
 
-const mocks = vi.hoisted(() => ({ post: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 
 vi.mock("../services/client", () => ({
-  apiClient: { post: mocks.post },
+  apiClient: { get: mocks.get, post: mocks.post },
 }));
 
 import { setLang } from "../lib/i18n";
-import { createLabDiagnosis } from "./api";
+import { createLabDiagnosis, getLabAnalysis } from "./api";
 
 function okEnvelope(data: Partial<LabDiagnosis> = {}) {
   return {
@@ -63,5 +63,22 @@ describe("createLabDiagnosis", () => {
       { asset_id: "asset-1", audience: { gender: "male" }, lang: "en" },
       { timeout: 600000 },
     );
+  });
+});
+
+describe("getLabAnalysis", () => {
+  beforeEach(() => {
+    mocks.get.mockReset();
+    mocks.get.mockResolvedValue({
+      data: { success: true, message: "", data: { analysis_status: "completed" } },
+    });
+  });
+
+  it("passes lang as a query param so the diagnosis matches the UI language", async () => {
+    await getLabAnalysis("asset-1", "en");
+    expect(mocks.get).toHaveBeenCalledWith("/lab/analysis/asset-1", { params: { lang: "en" } });
+
+    await getLabAnalysis("asset-1", "zh");
+    expect(mocks.get).toHaveBeenCalledWith("/lab/analysis/asset-1", { params: { lang: "zh" } });
   });
 });

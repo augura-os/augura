@@ -122,6 +122,13 @@ HOOK_MECHANISMS: Final = (
         "default_form": "engine_render",
         "status": "whitelist",
     },
+    {
+        "id": "H10",
+        "name": "荒诞奇观",
+        "motive": "pattern interrupt——视觉反常/荒诞场面制造停驻，无叙事承诺",
+        "default_form": "ai_skit",
+        "status": "active",
+    },
 )
 
 HOOK_FORM_TAGS: Final = (

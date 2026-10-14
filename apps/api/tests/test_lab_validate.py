@@ -79,6 +79,31 @@ class TestValidPayload:
         assert validate(payload, DIAGNOSIS_SCHEMA) == []
 
 
+class TestVocabGapsOptional:
+    """vocab_gaps 是可选字段：缺省不拦；带则逐项校验 required。"""
+
+    def test_payload_with_vocab_gaps_passes(self) -> None:
+        payload = _valid_output()
+        payload["vocab_gaps"] = [
+            {
+                "field": "hook_mechanism",
+                "proposal": "假输赢过山车",
+                "rationale": "输赢反复横跳，现有钩子机制覆盖不了",
+            }
+        ]
+        assert validate(payload, DIAGNOSIS_SCHEMA) == []
+
+    def test_payload_without_vocab_gaps_passes(self) -> None:
+        assert "vocab_gaps" not in DIAGNOSIS_SCHEMA["required"]
+        assert validate(_valid_output(), DIAGNOSIS_SCHEMA) == []
+
+    def test_vocab_gap_item_missing_rationale_fails(self) -> None:
+        payload = _valid_output()
+        payload["vocab_gaps"] = [{"field": "motif", "proposal": "身份错位"}]
+        errors = validate(payload, DIAGNOSIS_SCHEMA)
+        assert "vocab_gaps[0].rationale: required missing" in errors
+
+
 class TestViolations:
     def test_enum_violation_path(self) -> None:
         payload = _valid_output()

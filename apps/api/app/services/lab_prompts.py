@@ -20,7 +20,7 @@ from typing import Any, Final
 
 from app.services import lab_taxonomy as tax
 
-LAB_PROMPT_VERSION: Final = "lab-v0.1.2"
+LAB_PROMPT_VERSION: Final = "lab-v0.1.3"
 
 
 def _enum(rows: Any, *extra: str) -> list[str]:
@@ -221,6 +221,26 @@ DIAGNOSIS_SCHEMA: Final[dict[str, Any]] = {
             "enum": _enum(tax.EVIDENCE_LABELS),
         },
         "uncertainties": {"type": "array", "items": {"type": "string"}},
+        "vocab_gaps": {
+            "type": "array",
+            "description": "词表缺口提名（可选）：枚举判不出/母题说不清时必须提名；"
+            "判得准的字段禁止凑数",
+            "items": {
+                "type": "object",
+                "required": ["field", "proposal", "rationale"],
+                "properties": {
+                    "field": {
+                        "type": "string",
+                        "description": "缺口字段名，如 hook_mechanism / motif",
+                    },
+                    "proposal": {"type": "string", "description": "建议新词（短语）"},
+                    "rationale": {
+                        "type": "string",
+                        "description": "一句话：为什么现有词表覆盖不了",
+                    },
+                },
+            },
+        },
     },
 }
 
@@ -304,6 +324,10 @@ def diagnosis_system(lang: str = "zh") -> str:
             "fixed/reskinnable/do_not_copy 各 ≤6、strong_feedback_points ≤6、"
             "mappable_points/mapping_gaps/missing_product_facts 各 ≤8、"
             "uncertainties ≤6；每条一句话，优先覆盖与质量，禁止凑数式冗长。",
+            "10. 词表缺口提名：任何枚举字段判不出（uncertain）或母题说不清"
+            "（unclear）时，除按第 2/3 条处理外，必须在 vocab_gaps 提名新词候选"
+            "（field=缺口字段名、proposal=建议新词短语、rationale=一句话说明"
+            "现有词表为何覆盖不了）；判得准的字段不要提名，禁止凑数。",
         ]
     )
 

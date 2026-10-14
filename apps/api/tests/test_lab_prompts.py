@@ -29,6 +29,11 @@ class TestEnumDriftGuard:
         enum = set(_prop("classification", "hook_mechanism")["enum"])
         assert enum == _ids(tax.HOOK_MECHANISMS) | {"uncertain"}
 
+    def test_h10_in_hook_mechanism_enum(self) -> None:
+        # H10 荒诞奇观：词表新词必须同步进 schema enum（漂移即拦截）
+        assert any(row["id"] == "H10" for row in tax.HOOK_MECHANISMS)
+        assert "H10" in _prop("classification", "hook_mechanism")["enum"]
+
     def test_primary_entry_enum_matches_taxonomy(self) -> None:
         enum = set(_prop("emotion", "primary_entry")["enum"])
         assert enum == _ids(tax.EMOTION_ENTRIES) | {"uncertain"}
@@ -77,8 +82,8 @@ class TestProductFactsMissingGuidance:
 class TestRenderCatalog:
     def test_catalog_covers_all_hook_mechanisms(self) -> None:
         catalog = _render_catalog()
-        for hook_id in [f"H{index}" for index in range(1, 10)]:
-            assert hook_id in catalog
+        for row in tax.HOOK_MECHANISMS:
+            assert row["id"] in catalog
 
     def test_catalog_covers_all_emotion_entries(self) -> None:
         catalog = _render_catalog()

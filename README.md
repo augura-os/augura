@@ -43,14 +43,6 @@ Think of it as local-first creative intelligence infrastructure: your data stays
 - **Evolution tracking** — every variant records what it derived from and which factor changed (language / aspect ratio / intro sticker). When performance data flows back, you verdict the iteration; when a direction is exhausted, the system says so.
 - **Review inbox** — merge candidates, unassigned creatives, observation-pair closures, each pre-adjudicated by LLM self-consistency votes with reasons attached. And there's a brake on AI mistakes: if the override rate crosses the line, auto-judging degrades to suggestion-only.
 - **Explainable verdicts** — the Daily Brief's calls come from a registry of 18 named rules (rules-v3), each returning one of KEEP / ITERATE / PAUSE / ARCHIVE. Every suggestion carries a `reason_code` traceable to the exact named rule, a priority in dollars, and a confidence score.
-- **Objective-aware verdicts (new in v0.11)** — Facebook optimization types get their own KPI profiles: install-optimized creatives are judged on CPI against the market baseline, vo red lines tolerate double the CPP, aeo stays the default. The optimization-goal column in your Excel export is auto-detected and backfilled into historical rows.
-- **Winner labels** — seven labels classify where each creative stands: `proven_winner` / `potential_winner` / `saturated` / `audience_niche_winner` / `low_click_high_value` / `high_click_low_value` / `underexplored`.
-- **Auditable verdict snapshots** — every verdict run is snapshotted with a content hash: re-runs on unchanged data reproduce identical results, and the history stays auditable.
-- **Configurable metrics** — CPP red line, ROAS green line, whether D3 ROAS or D1 retention participate in verdicts: tune it all in Settings, no code changes.
-- **Reliable analysis queue** — analyses run as durable jobs on a standalone worker process: failed jobs can be retried from the UI, and a restart re-enqueues orphaned jobs automatically.
-- **Self-healing graph** — on startup the API reconciles Neo4j against PostgreSQL, clearing ghost nodes and rebuilding missing edges.
-- **Local embedding recall** — a built-in bge-small model powers semantic recall with no API key configured at all; if it's unavailable, recall degrades to text similarity and analysis never blocks.
-- **Bilingual UI** — the whole interface ships in English and Chinese, end to end.
 - **Data sovereignty** — creatives, performance rows and analyses live on your own machine / server / NAS (local data volumes). The Creative Genome Program is whitelist-only (creative names hashed), one-click opt-out, fully auditable.
 
 ## Quick Start

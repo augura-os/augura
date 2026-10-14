@@ -32,6 +32,13 @@ export default function LabPage() {
     setStep(1);
   };
 
+  // 历史列表「查看报告」= 替换会话（清空受众），跳过受众步直开报告步；
+  // 报告步幂等：有当前版本报告直接显示，没有会自动生成
+  const onOpenReport = (asset: AssetListItem) => {
+    updateSession({ assetId: asset.id, filename: asset.filename, audience: {} });
+    setStep(2);
+  };
+
   const onAudienceSubmit = (audience: LabAudience) => {
     if (!session) return;
     updateSession({ ...session, audience });
@@ -48,7 +55,9 @@ export default function LabPage() {
 
         <LabStepper current={step} maxUnlocked={session ? 2 : 0} onSelect={setStep} />
 
-        {step === 0 ? <ReferenceStep current={session} onReady={onReferenceReady} /> : null}
+        {step === 0 ? (
+          <ReferenceStep current={session} onReady={onReferenceReady} onOpenReport={onOpenReport} />
+        ) : null}
         {step === 1 && session ? (
           <AudienceForm
             filename={session.filename}

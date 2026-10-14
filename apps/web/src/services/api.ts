@@ -15,6 +15,7 @@ import type {
   GraphResponse,
   LabAnalysisResponse,
   LabDiagnosis,
+  LabReferenceListOut,
   LabVocabGapsResponse,
   MergeRequest,
   PerformanceRecord,
@@ -336,6 +337,12 @@ export function uploadLabReference(
       },
     }),
   );
+}
+
+/** GET /lab/references — 已上传竞品参考列表（created_at 倒序），
+ *  每项带当前/旧版本报告语言清单；参考步「已分析参考」历史列表用。 */
+export function getLabReferences(): Promise<LabReferenceListOut> {
+  return unwrap(apiClient.get<ApiResponse<LabReferenceListOut>>("/lab/references"));
 }
 
 /** GET /lab/analysis/{assetId}?lang= — 观察层 + 当前诊断 + 证据只读视图（轮询用）。

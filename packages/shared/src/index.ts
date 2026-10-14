@@ -508,6 +508,20 @@ export interface LabVocabGapsResponse {
   suggest_threshold: number;
 }
 
+/** GET /lab/references 单条：已上传竞品参考（AssetListItem 字段）
+ *  + 诊断报告语言状态；列表按 created_at 倒序。 */
+export interface LabReferenceItem extends AssetListItem {
+  /** 当前 prompt 版本已有的报告语言（如 ["zh"]）；非空 = 可直接打开报告 */
+  diagnosis_current_langs: string[];
+  /** 旧版本（stale）报告语言——词表/prompt 升级前的存量报告 */
+  diagnosis_stale_langs: string[];
+}
+
+/** GET /lab/references payload。 */
+export interface LabReferenceListOut {
+  items: LabReferenceItem[];
+}
+
 /** 六要素定性诊断输出（结构以后端 lab_prompts.DIAGNOSIS_SCHEMA 为准；
  *  枚举字段为受控词表 id，前端 lab.enum.* 映射展示名）。 */
 export interface LabDiagnosisOutput {

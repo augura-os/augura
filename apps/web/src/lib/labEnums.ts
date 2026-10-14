@@ -16,5 +16,14 @@ export function labEnumLabel(group: string, id: string | null | undefined): stri
   return label === key ? id : label;
 }
 
+/** 词表字段名（词表组名，如 hook_mechanism）→ 展示名（locale key `lab.field.<name>`；
+ *  缺模板回退原名）。/lab/vocab-gaps 的 field 是组名而非枚举 id，与 labEnumLabel 不同层。 */
+export function labFieldLabel(field: string | null | undefined): string {
+  if (!field) return "";
+  const key = `lab.field.${field}`;
+  const label = translate(key);
+  return label === key ? field : label;
+}
+
 /** 词表里的「判不出/说不清」兜底值（UI 用警示色标出，不当作正常结论）。 */
 export const UNCERTAIN_IDS = new Set(["uncertain", "unclear"]);

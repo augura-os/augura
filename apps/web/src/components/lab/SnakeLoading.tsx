@@ -118,18 +118,23 @@ interface SnakeLoadingProps {
   caption: string;
   /** 主文案后的浅色补充说明 */
   hint: string;
+  /** 秒表起点（epoch ms，缺省 = 挂载时刻）：remount 场景从在途 store 续传，
+   *  切走再回来秒表按真实经过时间走，不从 0 重置 */
+  startedAt?: number;
 }
 
 /** 贪吃蛇吃豆豆加载动画：装饰性网格状态机（lib/snakeGame），canvas 绘制。
  *  prefers-reduced-motion 时不启动动画，只画一帧静态画面并补一个 spinner。 */
-export function SnakeLoading({ caption, hint }: SnakeLoadingProps) {
+export function SnakeLoading({ caption, hint, startedAt }: SnakeLoadingProps) {
   const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<SnakeState | null>(null);
   if (stateRef.current === null) stateRef.current = initState(COLS, ROWS);
   const [eaten, setEaten] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
+  const [elapsed, setElapsed] = useState(() =>
+    startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0,
+  );
   const [reducedMotion] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -158,7 +163,7 @@ export function SnakeLoading({ caption, hint }: SnakeLoadingProps) {
     return () => observer.disconnect();
   }, []);
 
-  // 动画驱动：120ms 步进 + 重绘；1s 秒表。reduced-motion 下不启动（静态帧由上面的 resize 画出）
+  // 动画驱动：120ms 步进 + 重绘。reduced-motion 下不启动（静态帧由上面的 resize 画出）
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || reducedMotion) return;
@@ -169,12 +174,24 @@ export function SnakeLoading({ caption, hint }: SnakeLoadingProps) {
       draw(canvas, next);
       setEaten((prev) => (prev === next.eaten ? prev : next.eaten));
     }, TICK_MS);
-    const clock = window.setInterval(() => setElapsed((value) => value + 1), 1000);
     return () => {
       window.clearInterval(ticker);
-      window.clearInterval(clock);
     };
   }, [reducedMotion]);
+
+  // 1s 秒表独立驱动：startedAt 给定时按真实经过时间算（remount 连续），
+  // 否则从挂载起每秒 +1；startedAt 变化只重启秒表，不动动画 ticker
+  useEffect(() => {
+    if (reducedMotion) return;
+    const clock = window.setInterval(() => {
+      setElapsed((value) =>
+        startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : value + 1,
+      );
+    }, 1000);
+    return () => {
+      window.clearInterval(clock);
+    };
+  }, [reducedMotion, startedAt]);
 
   return (
     <div>

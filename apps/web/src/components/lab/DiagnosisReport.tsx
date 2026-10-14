@@ -109,6 +109,7 @@ export function DiagnosisReport({ diagnosis }: DiagnosisReportProps) {
   const transferable = out.transferable_structure;
   const selling = out.selling_point_candidates;
   const uncertainties = out.uncertainties ?? [];
+  const vocabGaps = out.vocab_gaps ?? [];
   const motifUnclear = UNCERTAIN_IDS.has(cls.motif);
 
   return (
@@ -342,7 +343,25 @@ export function DiagnosisReport({ diagnosis }: DiagnosisReportProps) {
         ) : null}
       </Section>
 
-      {/* ⑧ 不确定项（默认折叠）+ 版本审计行 */}
+      {/* ⑧ 词表缺口：AI 提名的新词候选（field + proposal 警示徽标 + 理由小字） */}
+      {vocabGaps.length > 0 ? (
+        <Section title={t("lab.report.vocabGaps")}>
+          <p className="text-xs text-neutral-500">{t("lab.report.vocabGapsHint")}</p>
+          <div className="space-y-2">
+            {vocabGaps.map((gap, index) => (
+              <div key={`${gap.field}:${gap.proposal}:${index}`} className="flex flex-wrap items-baseline gap-2">
+                <span className="text-xs text-neutral-500">{gap.field}</span>
+                <Badge variant="warning">{gap.proposal}</Badge>
+                {gap.rationale ? (
+                  <span className="text-xs text-neutral-400">{gap.rationale}</span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
+      {/* ⑨ 不确定项（默认折叠）+ 版本审计行 */}
       {uncertainties.length > 0 ? (
         <div className="rounded-lg border border-[#e5e5e5] bg-white">
           <button

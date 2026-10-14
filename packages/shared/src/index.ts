@@ -482,6 +482,32 @@ export interface LabObservation {
   creative_name: string | null;
 }
 
+/** 词表缺口候选：AI 判不出受控词表枚举值时提名的新词。
+ *  诊断 output 内嵌为本次素材的候选；/lab/vocab-gaps 聚合为跨素材复现视图。 */
+export interface LabVocabGap {
+  /** 所属受控词表字段（词表组名，如 hook_mechanism / form_tag） */
+  field: string;
+  /** AI 提名的新词 id */
+  proposal: string;
+  /** 提名理由 */
+  rationale: string;
+}
+
+/** GET /lab/vocab-gaps 单条：跨素材聚合的缺口候选（count 降序）。 */
+export interface LabVocabGapItem extends LabVocabGap {
+  /** 提名该候选的素材数 */
+  count: number;
+  /** 最近出现的素材（前端链到素材详情） */
+  recent_assets: Array<{ asset_id: string; filename: string }>;
+}
+
+/** GET /lab/vocab-gaps payload。 */
+export interface LabVocabGapsResponse {
+  items: LabVocabGapItem[];
+  /** 复现素材数达到该值的候选标记「建议准入」（前端徽标警示色 + 标记） */
+  suggest_threshold: number;
+}
+
 /** 六要素定性诊断输出（结构以后端 lab_prompts.DIAGNOSIS_SCHEMA 为准；
  *  枚举字段为受控词表 id，前端 lab.enum.* 映射展示名）。 */
 export interface LabDiagnosisOutput {
@@ -539,6 +565,8 @@ export interface LabDiagnosisOutput {
   };
   evidence_label: string;
   uncertainties: string[];
+  /** 词表缺口候选：本次诊断中 AI 判不出枚举值时提名的新词（可选，后端聚合进 /lab/vocab-gaps） */
+  vocab_gaps?: LabVocabGap[];
 }
 
 /** 落库的定性诊断（GET /lab/analysis 内嵌 + POST /lab/diagnoses 返回）。 */

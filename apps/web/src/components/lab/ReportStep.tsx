@@ -6,6 +6,7 @@ import { useCreateDiagnosis, useLabAnalysis } from "../../hooks/useLab";
 import { apiErrorCode } from "../../services/client";
 import { apiErrorText } from "../../lib/apiErrorText";
 import { getLang, useT } from "../../lib/i18n";
+import * as inflightDiagnoses from "../../lib/inflightDiagnoses";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Skeleton } from "../ui/skeleton";
@@ -17,11 +18,6 @@ interface ReportStepProps {
   session: LabSession;
 }
 
-/** 自动诊断防重集（按 assetId:lang）：StrictMode dev 双发 effect、切步来回导致
- *  remount 时 mutation 状态会重置，模块级 key 保证同一 asset 同一语言无重复在途诊断；
- *  key 含 lang 才能允许「zh 生成中切 en 触发 en」。 */
-const inflightDiagnoses = new Set<string>();
-
 /** 报告步：轮询观察层 → 触发/重跑定性诊断 → 渲染六要素报告。
  *  证据诚实区护栏：graph_evidence 为 null 只给降级文案（不出数字）；
  *  reference_only 顶部横幅；product_facts 为空给 Settings 引导卡。 */
@@ -30,20 +26,27 @@ export function ReportStep({ session }: ReportStepProps) {
   // lang 进 queryKey：语言切换 → useT 重渲染 → queryKey 变 → 自动按新语言拉取
   const { data, isLoading, isError, error } = useLabAnalysis(session.assetId, getLang());
   const diagnosisMutation = useCreateDiagnosis();
+  // 在途 key（assetId:lang）订阅模块级可订阅 store：切走导致 remount 后
+  // mutation 实例状态（isPending）丢失，但 store 里的 key 还在——isGenerating
+  // 保持 true，回来继续渲染贪吃蛇生成面板（此前会错渲染 ready 卡，按钮被
+  // inflight 守卫静默拦截，看起来像卡死）
+  const diagnosisKey = `${session.assetId}:${getLang()}`;
+  const inflightRemote = inflightDiagnoses.useInflightDiagnosis(diagnosisKey);
+  const isGenerating = diagnosisMutation.isPending || inflightRemote;
 
   /** 触发诊断（自动/手动共用同一 mutate）。force=false 走幂等/翻译分流，
    *  force=true（手动「重新诊断」）传 force_regenerate 全量重跑。仅失败时放行重试——
    *  成功则保留 key 直到 invalidate 后的 refetch 带回诊断（见下方 effect），
-   *  否则缓存陈旧窗口内（含 remount）会重复发起一次昂贵的 LLM 调用。 */
+   *  否则缓存陈旧窗口内（含 remount）会重复发起一次昂贵的 LLM 调用。
+   *  key 含 lang 才能允许「zh 生成中切 en 触发 en」。 */
   const runDiagnosis = (force = false) => {
-    const key = `${session.assetId}:${getLang()}`;
-    if (inflightDiagnoses.has(key)) return;
-    inflightDiagnoses.add(key);
+    if (inflightDiagnoses.has(diagnosisKey)) return;
+    inflightDiagnoses.add(diagnosisKey);
     diagnosisMutation.mutate(
       { asset_id: session.assetId, audience: session.audience, force_regenerate: force },
       {
         onSettled: (_diagnosis, mutationError) => {
-          if (mutationError) inflightDiagnoses.delete(key);
+          if (mutationError) inflightDiagnoses.remove(diagnosisKey);
         },
       },
     );
@@ -52,8 +55,8 @@ export function ReportStep({ session }: ReportStepProps) {
   // 诊断已随 refetch 到达 → 释放 inflight key，手动「重新诊断」才可再次发起
   const diagnosisArrived = Boolean(data?.diagnosis);
   useEffect(() => {
-    if (diagnosisArrived) inflightDiagnoses.delete(`${session.assetId}:${getLang()}`);
-  }, [diagnosisArrived, session.assetId]);
+    if (diagnosisArrived) inflightDiagnoses.remove(diagnosisKey);
+  }, [diagnosisArrived, diagnosisKey]);
 
   // 观察层就绪且无诊断时自动生成一次报告（stale 属于已有诊断，不自动触发，
   // 保持手动「重新诊断」）；失败不自动重试，由错误文案 + 手动按钮兜底。
@@ -61,7 +64,7 @@ export function ReportStep({ session }: ReportStepProps) {
     data?.analysis_status === "completed" &&
     !data.diagnosis &&
     !data.diagnosis_stale &&
-    !diagnosisMutation.isPending &&
+    !isGenerating &&
     !diagnosisMutation.isError;
 
   useEffect(() => {
@@ -120,11 +123,11 @@ export function ReportStep({ session }: ReportStepProps) {
 
   const diagnosisActions = (
     <div className="flex flex-wrap items-center gap-3">
-      <Button onClick={() => runDiagnosis(Boolean(diagnosis))} disabled={diagnosisMutation.isPending}>
-        {diagnosisMutation.isPending ? (
+      <Button onClick={() => runDiagnosis(Boolean(diagnosis))} disabled={isGenerating}>
+        {isGenerating ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : null}
-        {diagnosisMutation.isPending
+        {isGenerating
           ? t("lab.report.generating")
           : diagnosis
             ? t("lab.report.rerun")
@@ -190,8 +193,11 @@ export function ReportStep({ session }: ReportStepProps) {
           {data.diagnosis_stale ? diagnosisActions : null}
           <DiagnosisReport diagnosis={diagnosis} />
         </>
-      ) : diagnosisMutation.isPending ? (
-        // 生成中全宽面板：贪吃蛇动画 + 二态文案（翻译路径 ~30s / 全量生成 1–3 分钟）
+      ) : isGenerating ? (
+        // 生成中全宽面板：贪吃蛇动画 + 二态文案（翻译路径 ~30s / 全量生成 1–3 分钟）。
+        // isGenerating 含 remount 后仍在途（store 有 key）的场景，ready 卡不再出现。
+        // 秒表起点：本地 mutation pending 用本地起点（submittedAt）；remount 场景
+        // 用 store 的 startedAt，切走再回来秒表连续不重置
         <Card>
           <CardContent className="p-4 sm:p-6">
             <SnakeLoading
@@ -199,6 +205,11 @@ export function ReportStep({ session }: ReportStepProps) {
                 data.other_lang_available ? t("lab.report.translating") : t("lab.report.generating")
               }
               hint={t("lab.report.generatingHint")}
+              startedAt={
+                diagnosisMutation.isPending && diagnosisMutation.submittedAt
+                  ? diagnosisMutation.submittedAt
+                  : (inflightDiagnoses.startedAtFor(diagnosisKey) ?? undefined)
+              }
             />
           </CardContent>
         </Card>

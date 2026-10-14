@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowDown, ArrowUp, FileUp, Loader2, Plus, Trash2 } from "lucide-react";
 import type { AiTestResult, EmbeddingBackend } from "@shared";
 import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
+import { useLabVocabGaps } from "../hooks/useLab";
 import { fetchAiModels, importProductFacts, testAiConnection } from "../services/api";
 import {
   DEFAULT_THRESHOLDS,
@@ -22,6 +23,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
 import { aiTestResultText, apiErrorText } from "../lib/apiErrorText";
 import { useLanguage, useT, type Lang } from "../lib/i18n";
+import { labFieldLabel } from "../lib/labEnums";
 import { cn } from "../lib/utils";
 
 /** 一键预设：填好 base_url + vision_model + embedding_model。
@@ -74,6 +76,7 @@ const SECTIONS = [
   { id: "general", labelKey: "settings.nav.general" },
   { id: "ai", labelKey: "settings.nav.ai" },
   { id: "product-facts", labelKey: "settings.nav.productFacts" },
+  { id: "vocab-gaps", labelKey: "settings.nav.vocabGaps" },
   { id: "metrics", labelKey: "settings.nav.metrics" },
   { id: "scoring", labelKey: "settings.nav.scoring" },
   { id: "autojudge", labelKey: "settings.nav.autojudge" },
@@ -117,6 +120,70 @@ function GeneralSection() {
             ))}
           </div>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 词表缺口 section：AI 判不出的枚举值跨素材聚合提名（GET /lab/vocab-gaps）。
+ *  复现到 suggest_threshold 标「建议准入」；准入本身仍人工改词表，系统不自动升级。 */
+function VocabGapsSection() {
+  const t = useT();
+  const { data, isLoading, isError, error } = useLabVocabGaps();
+  const threshold = data?.suggest_threshold ?? 2;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("settings.vocabGaps.title")}</CardTitle>
+        <CardDescription>{t("settings.vocabGaps.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError || !data ? (
+          <p className="text-sm text-red-600">
+            {apiErrorText(error, t) || t("settings.vocabGaps.loadFailed")}
+          </p>
+        ) : data.items.length === 0 ? (
+          <p className="text-sm text-neutral-500">{t("settings.vocabGaps.empty")}</p>
+        ) : (
+          data.items.map((gap) => {
+            const suggested = gap.count >= threshold;
+            return (
+              <div
+                key={`${gap.field}:${gap.proposal}`}
+                className="rounded-md border border-[#e5e5e5] px-3 py-2.5"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-neutral-500">{labFieldLabel(gap.field)}</span>
+                  <span className="text-sm font-semibold text-neutral-900">{gap.proposal}</span>
+                  <Badge variant={suggested ? "warning" : "secondary"}>
+                    {t("settings.vocabGaps.count").replace("{n}", String(gap.count))}
+                  </Badge>
+                  {suggested ? (
+                    <Badge variant="warning">{t("settings.vocabGaps.suggested")}</Badge>
+                  ) : null}
+                </div>
+                {gap.rationale ? (
+                  <p className="mt-1 text-xs text-neutral-500">{gap.rationale}</p>
+                ) : null}
+                {gap.recent_assets.length > 0 ? (
+                  <p className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs">
+                    {gap.recent_assets.map((asset) => (
+                      <Link
+                        key={asset.asset_id}
+                        to={`/assets/${asset.asset_id}`}
+                        className="text-neutral-500 underline underline-offset-2 hover:text-neutral-900"
+                      >
+                        {asset.filename}
+                      </Link>
+                    ))}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })
+        )}
       </CardContent>
     </Card>
   );
@@ -479,6 +546,8 @@ export default function SettingsPage() {
 
           <div className="min-w-0 flex-1">
         {section === "general" ? <GeneralSection /> : null}
+
+        {section === "vocab-gaps" ? <VocabGapsSection /> : null}
 
         {section === "ai" ? (
         <Card>

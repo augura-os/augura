@@ -15,6 +15,7 @@ import type {
   GraphResponse,
   LabAnalysisResponse,
   LabDiagnosis,
+  LabVocabGapsResponse,
   MergeRequest,
   PerformanceRecord,
   ProductFactsImportResult,
@@ -355,4 +356,10 @@ export function createLabDiagnosis(body: CreateDiagnosisRequest): Promise<LabDia
   return unwrap(
     apiClient.post<ApiResponse<LabDiagnosis>>("/lab/diagnoses", payload, { timeout: 600000 }),
   );
+}
+
+/** GET /lab/vocab-gaps — 跨素材聚合的词表缺口候选（count 降序；
+ *  count ≥ suggest_threshold 的候选前端标记「建议准入」）。 */
+export function getLabVocabGaps(): Promise<LabVocabGapsResponse> {
+  return unwrap(apiClient.get<ApiResponse<LabVocabGapsResponse>>("/lab/vocab-gaps"));
 }

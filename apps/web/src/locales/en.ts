@@ -643,6 +643,9 @@ export const en: Record<string, string> = {
   "lab.report.mappingGaps": "Mapping gaps",
   "lab.report.missingFacts": "Missing product facts (to be filled — never invented)",
   "lab.report.uncertainties": "Uncertainties ({n})",
+  "lab.report.vocabGaps": "Vocabulary gaps",
+  "lab.report.vocabGapsHint":
+    "The new term candidates below are nominated by the AI; once they recur across assets, they can be reviewed and admitted into the vocabulary in Settings.",
   "lab.report.meta": "prompt {prompt} · engine {engine} · {date}",
 
   // --- Creative Lab controlled taxonomy (ids mirror backend lab_taxonomy.py) ---
@@ -718,6 +721,19 @@ export const en: Record<string, string> = {
   "lab.enum.choice.正解": "Correct",
   "lab.enum.choice.作死": "Fatal",
 
+  // --- Creative Lab vocabulary field names (field of /lab/vocab-gaps; falls back to raw name) ---
+  "lab.field.hook_mechanism": "Hook mechanism",
+  "lab.field.form_tag": "Form tag",
+  "lab.field.timeliness": "Timeliness",
+  "lab.field.opening_3s": "0–3s solution",
+  "lab.field.brand_implant": "Brand implant",
+  "lab.field.bridge_mode": "A→B bridge",
+  "lab.field.b_narrative": "B-segment narrative grammar",
+  "lab.field.b_ui": "B-segment UI grammar",
+  "lab.field.visual_route": "Visual route",
+  "lab.field.emotion_entry": "Emotion entry",
+  "lab.field.spectrum": "Product-truth spectrum",
+
   // --- graph legend ---
   "graph.legend.dna": "DNA",
   "graph.legend.creative": "Creative",
@@ -732,6 +748,7 @@ export const en: Record<string, string> = {
   "settings.nav.general": "General",
   "settings.nav.ai": "AI Provider",
   "settings.nav.productFacts": "Product Facts",
+  "settings.nav.vocabGaps": "Vocabulary Gaps",
   "settings.nav.metrics": "Metrics",
   "settings.nav.scoring": "Scoring & Archive",
   "settings.nav.autojudge": "Auto-judge",
@@ -856,6 +873,14 @@ export const en: Record<string, string> = {
     "Parsed from file; the doc was too long and got truncated — review, then save",
   "settings.productFacts.importFailed": "Parse failed, please retry",
   "settings.productFacts.save": "Save product facts",
+  "settings.vocabGaps.title": "Vocabulary Gaps",
+  "settings.vocabGaps.description":
+    "When the AI cannot map an enum value to the controlled vocabulary during diagnosis, the new term candidate is recorded here and aggregated by asset count. Once a candidate recurs up to the threshold it is marked “Suggested” — the vocabulary is upgraded only after your manual confirmation; the system never changes it automatically.",
+  "settings.vocabGaps.loadFailed": "Failed to load vocabulary gaps",
+  "settings.vocabGaps.empty":
+    "No vocabulary gaps yet — enum values the AI cannot classify will be nominated here as new term candidates.",
+  "settings.vocabGaps.count": "{n} assets",
+  "settings.vocabGaps.suggested": "Suggested",
   "settings.telemetry.title": "Creative Genome Program",
   "settings.telemetry.desc1":
     "Every ruling you make trains a system that understands creatives better — sharper suggestions and fuller genre baselines. Only whitelisted fields are sent back (feature clicks / correction actions / genre aggregate buckets), and creative names are hashed. ",

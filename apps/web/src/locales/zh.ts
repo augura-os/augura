@@ -619,6 +619,8 @@ export const zh: Record<string, string> = {
   "lab.report.mappingGaps": "映射缺口",
   "lab.report.missingFacts": "缺失的产品事实（需补全，系统不编造）",
   "lab.report.uncertainties": "不确定项（{n}）",
+  "lab.report.vocabGaps": "词表缺口",
+  "lab.report.vocabGapsHint": "以下新词候选由 AI 提名，积累复现后可在设置页评审准入词表。",
   "lab.report.meta": "prompt {prompt} · 引擎 {engine} · {date}",
 
   // --- Creative Lab 受控词表（id 与后端 lab_taxonomy.py 同步，前端常量副本） ---
@@ -694,6 +696,19 @@ export const zh: Record<string, string> = {
   "lab.enum.choice.正解": "正解",
   "lab.enum.choice.作死": "作死",
 
+  // --- Creative Lab 词表字段名（/lab/vocab-gaps 的 field；查不到回退原名） ---
+  "lab.field.hook_mechanism": "钩子机制",
+  "lab.field.form_tag": "形式标签",
+  "lab.field.timeliness": "时效",
+  "lab.field.opening_3s": "0–3s 解法",
+  "lab.field.brand_implant": "品牌植入",
+  "lab.field.bridge_mode": "A→B 桥接",
+  "lab.field.b_narrative": "B 段叙事语法",
+  "lab.field.b_ui": "B 段 UI 语法",
+  "lab.field.visual_route": "画面路线",
+  "lab.field.emotion_entry": "情绪入口",
+  "lab.field.spectrum": "产品真实光谱",
+
   // --- 图谱图例 ---
   "graph.legend.dna": "DNA",
   "graph.legend.creative": "创意",
@@ -707,6 +722,7 @@ export const zh: Record<string, string> = {
   "settings.nav.general": "通用",
   "settings.nav.ai": "AI Provider",
   "settings.nav.productFacts": "产品事实",
+  "settings.nav.vocabGaps": "词表缺口",
   "settings.nav.metrics": "素材指标",
   "settings.nav.scoring": "评分与归档",
   "settings.nav.autojudge": "自动判定",
@@ -819,6 +835,13 @@ export const zh: Record<string, string> = {
   "settings.productFacts.importedTruncated": "已从文件解析，资料过长已截断，请检查后保存",
   "settings.productFacts.importFailed": "解析失败，请重试",
   "settings.productFacts.save": "保存产品事实",
+  "settings.vocabGaps.title": "词表缺口",
+  "settings.vocabGaps.description":
+    "诊断时 AI 判不出受控词表枚举值，会把新词候选记到这里并按素材数聚合。同一候选复现到阈值后标记「建议准入」——你确认后手动升级词表，系统不自动改。",
+  "settings.vocabGaps.loadFailed": "加载词表缺口失败",
+  "settings.vocabGaps.empty": "暂无词表缺口——AI 判不出的枚举值会在这里提名新词候选",
+  "settings.vocabGaps.count": "{n} 条素材",
+  "settings.vocabGaps.suggested": "建议准入",
   "settings.telemetry.title": "创意基因共建计划",
   "settings.telemetry.desc1":
     "你的每一次判断都在训练一个更懂创意的系统——判定建议更准、品类基准更全。回传白名单字段（功能点击 / 修正行为 / 品类聚合桶），素材名哈希脱敏，",

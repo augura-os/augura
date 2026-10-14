@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreateDiagnosisRequest } from "@shared";
 import type { Lang } from "../lib/i18n";
-import { createLabDiagnosis, getLabAnalysis } from "../services/api";
+import { createLabDiagnosis, getLabAnalysis, getLabVocabGaps } from "../services/api";
 
 /** GET /lab/analysis/{assetId}?lang=：pending/processing 时每 3s 轮询，终态自停。
  *  lang 进 queryKey——语言切换后调用方重渲染传入新 lang 即自动按新语言 refetch。 */
@@ -27,5 +27,13 @@ export function useCreateDiagnosis() {
         queryKey: ["lab", "analysis", diagnosis.asset_id],
       });
     },
+  });
+}
+
+/** GET /lab/vocab-gaps：Settings「词表缺口」区块用（items 由后端按 count 降序）。 */
+export function useLabVocabGaps() {
+  return useQuery({
+    queryKey: ["lab", "vocab-gaps"],
+    queryFn: getLabVocabGaps,
   });
 }

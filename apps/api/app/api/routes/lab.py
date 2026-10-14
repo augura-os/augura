@@ -44,8 +44,11 @@ COMPETITOR_REFERENCE_TAG = "competitor-reference"
 
 
 def _diagnosis_out(row: CreativeDiagnosis) -> LabDiagnosisOut:
+    # lang 存于 audience_context 快照；旧行无此键时默认 zh（兼容历史数据）
+    audience = row.audience_context or {}
     return LabDiagnosisOut(
         asset_id=row.asset_id,
+        lang=str(audience.get("lang", "zh")),
         output=row.output,
         evidence_label=row.evidence_label,
         prompt_version=row.prompt_version,
@@ -138,7 +141,11 @@ def create_diagnosis(
 ) -> Envelope[LabDiagnosisOut]:
     try:
         row = lab_diagnosis.run_diagnosis(
-            db, settings, asset_id=payload.asset_id, audience=_audience_dict(payload.audience)
+            db,
+            settings,
+            asset_id=payload.asset_id,
+            audience=_audience_dict(payload.audience),
+            lang=payload.lang,
         )
     except lab_diagnosis.LabAssetNotFoundError:
         raise _asset_not_found(payload.asset_id) from None

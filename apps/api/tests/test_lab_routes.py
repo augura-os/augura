@@ -241,4 +241,130 @@ class TestCreateDiagnosis:
             asset.id, LAB_PROMPT_VERSION
         )
         assert stored is not None
-        assert stored.audience_context == {"region": "FAKE", "age": "18-24"}
+        assert stored.audience_context == {"region": "FAKE", "age": "18-24", "lang": "zh"}
+
+
+def _capture_llm(monkeypatch) -> list[str]:  # noqa: ANN001, ANN202
+    """mock LLM 并捕获每次调用的 system prompt（语言断言用）。"""
+    systems: list[str] = []
+
+    def _fake(_config, *, system, **_kw):  # noqa: ANN001, ANN202
+        systems.append(system)
+        return _valid_output()
+
+    monkeypatch.setattr(lab_diagnosis, "complete_json", _fake)
+    monkeypatch.setattr(
+        lab_diagnosis,
+        "resolve_ai_config",
+        lambda _db, _s: AIConfig(
+            api_key="sk-fake",
+            base_url="",
+            vision_model="fake-vision-v1",
+            embedding_model="",
+        ),
+    )
+    return systems
+
+
+class TestDiagnosisLang:
+    """POST /lab/diagnoses 的 lang 参数全链路：schema → service → prompt。"""
+
+    def test_lang_en_sends_english_rule8(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-lang-en.mp4")
+        systems = _capture_llm(monkeypatch)
+
+        response = api_client.post(
+            "/lab/diagnoses", json={"asset_id": asset.id, "lang": "en"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["lang"] == "en"
+        assert len(systems) == 1
+        # mock LLM 收到的 system prompt：英文第 8 条在、中文第 8 条不在
+        assert "8. Output language: except enum ids" in systems[0]
+        assert "8. 输出语言" not in systems[0]
+        stored = CreativeDiagnosisRepository(db_session).get_current(
+            asset.id, LAB_PROMPT_VERSION
+        )
+        assert stored is not None
+        assert stored.audience_context == {"lang": "en"}
+
+    def test_default_lang_keeps_chinese_rule8(
+        self, api_client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-lang-zh.mp4")
+        systems = _capture_llm(monkeypatch)
+
+        response = api_client.post("/lab/diagnoses", json={"asset_id": asset.id})
+
+        assert response.status_code == 200
+        assert response.json()["data"]["lang"] == "zh"
+        assert len(systems) == 1
+        assert "8. 输出语言：除枚举 id 外，全部字段一律使用简体中文" in systems[0]
+        assert "8. Output language" not in systems[0]
+
+    def test_invalid_lang_rejected_400(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 词表外语言：Literal 校验失败，全局 RequestValidationError 映 400
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-lang-bad.mp4")
+        response = api_client.post(
+            "/lab/diagnoses", json={"asset_id": asset.id, "lang": "fr"}
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "validation_error"
+
+
+class TestAnalysisViewDiagnosisLang:
+    """GET /lab/analysis 的 diagnosis.lang：从 audience_context 快照回填。"""
+
+    def _seed_diagnosis(
+        self, db: Session, asset_id: str, audience_context: dict | None
+    ) -> None:
+        CreativeDiagnosisRepository(db).upsert(
+            asset_id,
+            prompt_version=LAB_PROMPT_VERSION,
+            observation_snapshot={"summary": "虚构观察层"},
+            output=_valid_output(),
+            evidence_label="reference_only",
+            engine_version="auto:fake-vision-v1",
+            audience_context=audience_context,
+        )
+
+    def test_en_snapshot_returns_en(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-en.mp4")
+        self._seed_diagnosis(db_session, asset.id, {"lang": "en"})
+
+        response = api_client.get(f"/lab/analysis/{asset.id}")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["diagnosis"]["lang"] == "en"
+
+    def test_legacy_row_without_lang_defaults_zh(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 旧行：audience_context 有受众但无 lang 键
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-old.mp4")
+        self._seed_diagnosis(db_session, asset.id, {"region": "FAKE"})
+
+        response = api_client.get(f"/lab/analysis/{asset.id}")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["diagnosis"]["lang"] == "zh"
+
+    def test_legacy_row_without_audience_defaults_zh(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 旧行：audience_context 整列为 NULL
+        asset = _seed_completed_with_analysis(db_session, "FAKE-m1b-view-lang-null.mp4")
+        self._seed_diagnosis(db_session, asset.id, None)
+
+        response = api_client.get(f"/lab/analysis/{asset.id}")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["diagnosis"]["lang"] == "zh"

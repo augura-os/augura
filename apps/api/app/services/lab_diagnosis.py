@@ -115,8 +115,13 @@ def run_diagnosis(
     *,
     asset_id: str,
     audience: dict[str, Any] | None,
+    lang: str = "zh",
 ) -> CreativeDiagnosis:
-    """跑一条素材的定性诊断并幂等落库，返回落库行（flush，不 commit）。"""
+    """跑一条素材的定性诊断并幂等落库，返回落库行（flush，不 commit）。
+
+    ``lang`` 只切换诊断 prompt 第 8 条输出语言铁律（zh/en），随
+    audience_context 快照落库（读出侧按此回填 LabDiagnosisOut.lang）。
+    """
     asset = AssetRepository(db).get(asset_id)
     if asset is None:
         raise LabAssetNotFoundError(f"素材不存在：{asset_id}")
@@ -153,7 +158,7 @@ def run_diagnosis(
     for _attempt in range(2):
         candidate = complete_json(
             config,
-            system=diagnosis_system(),
+            system=diagnosis_system(lang),
             user=user_prompt,
             max_tokens=DIAGNOSIS_MAX_TOKENS,
         )
@@ -182,7 +187,8 @@ def run_diagnosis(
         prompt_version=LAB_PROMPT_VERSION,
         observation_snapshot=observation,
         product_facts_snapshot=product_facts,
-        audience_context=audience,
+        # lang 并入受众快照：无受众时也至少留 {"lang": ...}，供读出侧回填
+        audience_context={**(audience or {}), "lang": lang},
         output=output,
         evidence_label=str(output["evidence_label"]),
         engine_version=f"auto:{config.vision_model}",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -22,12 +22,16 @@ class LabDiagnosisRequest(BaseModel):
 
     asset_id: str
     audience: AudienceContext | None = None
+    # 诊断报告输出语言（仅换 prompt 第 8 条铁律；zh 文案逐字不变）
+    lang: Literal["zh", "en"] = "zh"
 
 
 class LabDiagnosisOut(BaseModel):
     """落库的定性诊断（output 为六要素诊断 JSON，结构见 DIAGNOSIS_SCHEMA）。"""
 
     asset_id: str
+    # 该次诊断的输出语言（存于 audience_context 快照；旧行无此键按 zh 回填）
+    lang: str
     output: dict[str, Any]
     evidence_label: str
     prompt_version: str

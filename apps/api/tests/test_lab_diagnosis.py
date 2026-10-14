@@ -122,7 +122,7 @@ class TestSuccess:
         assert row.output["verdict"].startswith("虚构素材")
         assert row.observation_snapshot["summary"] == "虚构观察层：舰队重建素材"
         assert row.observation_snapshot["tags"] == ["星海", "建造"]
-        assert row.audience_context == {"region": "FAKE"}
+        assert row.audience_context == {"region": "FAKE", "lang": "zh"}
         assert row.product_facts_snapshot is None  # 未配置 product_facts
         assert len(llm_mocks) == 1
         assert llm_mocks[0]["max_tokens"] == lab_diagnosis.DIAGNOSIS_MAX_TOKENS
@@ -283,6 +283,42 @@ class TestGraphEvidence:
         assert (
             lab_diagnosis.graph_evidence_for(_NoCandidateDb(), analysis) is None  # type: ignore[arg-type]
         )
+
+
+class TestDiagnosisLang:
+    """诊断输出语言参数：lang=en 换英文第 8 条铁律，其余逐字不变。"""
+
+    def test_lang_en_switches_rule8_to_english(
+        self, db_session: Session, llm_mocks: list
+    ) -> None:
+        asset = _seed_analyzed_asset(db_session, "FAKE-m1b-lang-en.mp4")
+
+        row = lab_diagnosis.run_diagnosis(
+            db_session, Settings(), asset_id=asset.id, audience=None, lang="en"
+        )
+
+        assert len(llm_mocks) == 1
+        system = llm_mocks[0]["system"]
+        # 英文第 8 条在、中文第 8 条不在
+        assert "8. Output language: except enum ids, write every field value in English" in system
+        assert "8. 输出语言" not in system
+        # 无受众时快照也至少留 lang
+        assert row.audience_context == {"lang": "en"}
+
+    def test_default_lang_keeps_chinese_rule8(
+        self, db_session: Session, llm_mocks: list
+    ) -> None:
+        asset = _seed_analyzed_asset(db_session, "FAKE-m1b-lang-zh.mp4")
+
+        row = lab_diagnosis.run_diagnosis(
+            db_session, Settings(), asset_id=asset.id, audience={"region": "FAKE"}
+        )
+
+        system = llm_mocks[0]["system"]
+        assert "8. 输出语言：除枚举 id 外，全部字段一律使用简体中文" in system
+        assert "8. Output language" not in system
+        # lang 并入受众快照，不覆盖既有受众字段
+        assert row.audience_context == {"region": "FAKE", "lang": "zh"}
 
 
 class TestPreconditions:

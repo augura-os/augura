@@ -261,7 +261,20 @@ def _render_catalog() -> str:
     return "\n".join(f"- {line}" for line in sections)
 
 
-def diagnosis_system() -> str:
+_RULE8_ZH = (
+    "8. 输出语言：除枚举 id 外，全部字段一律使用简体中文，不夹杂英文"
+    "（专有名词/品牌名/外文原词引用除外）。"
+)
+_RULE8_EN = (
+    "8. Output language: except enum ids, write every field value in English "
+    "(proper nouns / brand names / quoted original terms excepted)."
+)
+
+
+def diagnosis_system(lang: str = "zh") -> str:
+    # lang 是运行时参数而非 prompt 变更：zh 文案逐字不变，故不 bump 版本；
+    # 落库行经 audience_context.lang 记录实际输出语言。
+    rule8 = _RULE8_EN if lang == "en" else _RULE8_ZH
     return "\n".join(
         [
             "你是资深效果广告创意分析师（游戏 UA 方向）。任务：基于「观察层」"
@@ -283,8 +296,7 @@ def diagnosis_system() -> str:
             "一律 reference_only，并在 verdict 中明示「未验证的测试假设」。",
             "7. 输出严格 JSON，结构以 user message 中的 schema 为准，"
             "不输出 schema 之外的字段。",
-            "8. 输出语言：除枚举 id 外，全部字段一律使用简体中文，不夹杂英文"
-            "（专有名词/品牌名/外文原词引用除外）。",
+            rule8,
             "9. 输出务必紧凑：各数组字段条数上限——选择链 ≤6、key_visuals ≤8、"
             "fixed/reskinnable/do_not_copy 各 ≤6、strong_feedback_points ≤6、"
             "mappable_points/mapping_gaps/missing_product_facts 各 ≤8、"

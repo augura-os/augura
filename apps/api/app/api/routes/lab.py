@@ -1,4 +1,4 @@
-"""Creative Lab 路由（M1）：竞品参考上传 / 分析视图 / 定性诊断。
+"""Creative Lab 路由（M1）：竞品参考上传 / 分析视图 / 定性诊断 / 词表缺口聚合。
 
 - ``POST /lab/references``：与 /upload 同一 ingest 核心，新建 asset 全部
   打 competitor-reference 来源标记（sticky，pipeline 重分析不抹）。
@@ -8,6 +8,8 @@
 - ``POST /lab/diagnoses``：定性诊断落库（幂等 upsert）。默认分流：
   当前版本该语言已有报告 → 幂等直接返回；另一语言有 → LLM 翻译；
   都没有 → 全量诊断。``force_regenerate=true`` 跳过分流强制全量重跑。
+- ``GET /lab/vocab-gaps``：全库诊断提名的词表缺口聚合（按 field+proposal
+  分组计数，per-asset 去重），供词表增补评审。
 """
 
 from __future__ import annotations
@@ -34,8 +36,9 @@ from app.schemas.lab import (
     LabAnalysisView,
     LabDiagnosisOut,
     LabDiagnosisRequest,
+    VocabGapListOut,
 )
-from app.services import lab_diagnosis
+from app.services import lab_diagnosis, lab_vocab_gaps
 from app.services.ingest import ingest_files
 from app.services.lab_prompts import LAB_PROMPT_VERSION
 from app.services.settings import resolve_product_facts
@@ -136,6 +139,16 @@ def get_lab_analysis(
                 else None
             ),
             product_facts=resolve_product_facts(db),
+        )
+    )
+
+
+@router.get("/lab/vocab-gaps", response_model=Envelope[VocabGapListOut])
+def list_vocab_gaps(db: DbDep) -> Envelope[VocabGapListOut]:
+    return ok(
+        VocabGapListOut(
+            items=lab_vocab_gaps.aggregate_vocab_gaps(db),
+            suggest_threshold=lab_vocab_gaps.SUGGEST_THRESHOLD,
         )
     )
 

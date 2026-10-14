@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -641,3 +642,143 @@ class TestDiagnosisDispatch:
         )
         assert stored is not None
         assert stored.audience_context == {"lang": "zh"}  # 全量路径，无 translated_from
+
+
+class TestVocabGaps:
+    """GET /lab/vocab-gaps：output->vocab_gaps 全库聚合（per-asset 去重）。"""
+
+    def _seed_diagnosis(
+        self,
+        db: Session,
+        asset_id: str,
+        *,
+        lang: str = "zh",
+        gaps: list[dict] | None,
+        prompt_version: str = LAB_PROMPT_VERSION,
+        created_at: datetime | None = None,
+    ):
+        output = _valid_output()
+        if gaps is not None:
+            output["vocab_gaps"] = gaps
+        row = CreativeDiagnosisRepository(db).upsert(
+            asset_id,
+            prompt_version=prompt_version,
+            lang=lang,
+            observation_snapshot={"summary": "虚构观察层"},
+            output=output,
+            evidence_label="reference_only",
+            engine_version="auto:fake-vision-v1",
+            audience_context={"lang": lang},
+        )
+        # 同事务落库 created_at 同为 func.now()（事务起点）；显式覆盖让
+        # DISTINCT ON 的"最新"与 recent_assets 排序在测试里可比较
+        if created_at is not None:
+            row.created_at = created_at
+            db.flush()
+        return row
+
+    def test_empty_db_returns_empty_items(self, api_client: TestClient) -> None:
+        response = api_client.get("/lab/vocab-gaps")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == {"items": [], "suggest_threshold": 2}
+
+    def test_grouping_count_asset_dedup_and_order(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # a1 落 zh+en 双语言行（同血缘，vocab_gaps 相同）→ 只计 1 次；
+        # a2 同 (field, proposal) → count=2；a3 不同 proposal → 单独一组
+        a1 = _seed_asset(db_session, "FAKE-m17-gap-a.mp4")
+        a2 = _seed_asset(db_session, "FAKE-m17-gap-b.mp4")
+        a3 = _seed_asset(db_session, "FAKE-m17-gap-c.mp4")
+        t1 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t2 = datetime(2026, 10, 2, tzinfo=timezone.utc)
+        t3 = datetime(2026, 10, 3, tzinfo=timezone.utc)
+        shared = {"field": "hook_mechanism", "proposal": "假输赢过山车"}
+        self._seed_diagnosis(
+            db_session,
+            a1.id,
+            lang="zh",
+            gaps=[{**shared, "rationale": "a1 的提名理由"}],
+            created_at=t1,
+        )
+        self._seed_diagnosis(
+            db_session,
+            a1.id,
+            lang="en",
+            gaps=[{**shared, "rationale": "a1 的提名理由"}],
+            created_at=t1,
+        )
+        self._seed_diagnosis(
+            db_session,
+            a2.id,
+            gaps=[{**shared, "rationale": "a2 最新提名理由"}],
+            created_at=t2,
+        )
+        self._seed_diagnosis(
+            db_session,
+            a3.id,
+            gaps=[
+                {
+                    "field": "motif",
+                    "proposal": "身份错位",
+                    "rationale": "母题说不清",
+                }
+            ],
+            created_at=t3,
+        )
+
+        response = api_client.get("/lab/vocab-gaps")
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["suggest_threshold"] == 2
+        # count 降序：shared 组 2（a1 双语行去重后只计 1 次 + a2），motif 组 1
+        assert [(item["field"], item["proposal"], item["count"]) for item in data["items"]] == [
+            ("hook_mechanism", "假输赢过山车", 2),
+            ("motif", "身份错位", 1),
+        ]
+        top = data["items"][0]
+        # rationale 取最新一次提名（a2 的 created_at 更新）
+        assert top["rationale"] == "a2 最新提名理由"
+        # recent_assets 按诊断 created_at 倒序、带 filename；a1 只出现一次
+        assert top["recent_assets"] == [
+            {"asset_id": a2.id, "filename": "FAKE-m17-gap-b.mp4"},
+            {"asset_id": a1.id, "filename": "FAKE-m17-gap-a.mp4"},
+        ]
+        assert data["items"][1]["recent_assets"] == [
+            {"asset_id": a3.id, "filename": "FAKE-m17-gap-c.mp4"}
+        ]
+
+    def test_older_prompt_version_row_superseded(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 同 asset 旧/新 prompt 版本两行 → 只取最新 created_at 那行的提名
+        asset = _seed_asset(db_session, "FAKE-m17-gap-version.mp4")
+        self._seed_diagnosis(
+            db_session,
+            asset.id,
+            gaps=[{"field": "motif", "proposal": "旧版提名", "rationale": "旧"}],
+            prompt_version="lab-v0.0.0-legacy",
+            created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+        self._seed_diagnosis(
+            db_session,
+            asset.id,
+            gaps=[{"field": "motif", "proposal": "新版提名", "rationale": "新"}],
+            created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        )
+
+        data = api_client.get("/lab/vocab-gaps").json()["data"]
+        assert [item["proposal"] for item in data["items"]] == ["新版提名"]
+
+    def test_diagnosis_without_vocab_gaps_not_counted(
+        self, api_client: TestClient, db_session: Session
+    ) -> None:
+        # 老 prompt 版本行没有 vocab_gaps 键 → 不进聚合
+        asset = _seed_asset(db_session, "FAKE-m17-gap-none.mp4")
+        self._seed_diagnosis(db_session, asset.id, gaps=None)
+
+        data = api_client.get("/lab/vocab-gaps").json()["data"]
+        assert data == {"items": [], "suggest_threshold": 2}

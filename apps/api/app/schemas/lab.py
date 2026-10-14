@@ -1,4 +1,4 @@
-"""Creative Lab DTOs（M1：诊断服务三端点）。"""
+"""Creative Lab DTOs（M1：诊断服务端点 + 词表缺口聚合视图）。"""
 
 from __future__ import annotations
 
@@ -56,3 +56,32 @@ class LabAnalysisView(BaseModel):
     other_lang_available: bool
     graph_evidence: dict[str, Any] | None
     product_facts: dict[str, Any]
+
+
+class VocabGapAssetRef(BaseModel):
+    """缺口提名涉及的素材引用（asset_id + 文件名）。"""
+
+    asset_id: str
+    filename: str
+
+
+class VocabGapItem(BaseModel):
+    """按 (field, proposal) 聚合的一条词表缺口提名。"""
+
+    field: str
+    proposal: str
+    # 提名该缺口的素材数（每 asset 只计一次：同血缘 zh/en 行与旧 prompt
+    # 版本行按 asset 去重，只取最新一条诊断）
+    count: int
+    # 最新一次提名的理由
+    rationale: str
+    # 最近 3 个提名该缺口的素材（诊断 created_at 倒序）
+    recent_assets: list[VocabGapAssetRef]
+
+
+class VocabGapListOut(BaseModel):
+    """Response data of ``GET /lab/vocab-gaps``。"""
+
+    items: list[VocabGapItem]
+    # count ≥ 该值的缺口建议进入词表增补评审（透传给前端作高亮线）
+    suggest_threshold: int

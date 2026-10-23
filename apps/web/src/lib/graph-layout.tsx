@@ -75,6 +75,19 @@ function buildGraphIndex(graph: GraphResponse): GraphIndex {
   return { nodesById, outgoingEdgesByNodeId, incomingEdgesByNodeId };
 }
 
+// Graph responses are immutable query snapshots. Reuse their index across
+// layout and side-panel lookups without keeping old responses alive.
+const graphIndexCache = new WeakMap<GraphResponse, GraphIndex>();
+
+function graphIndexFor(graph: GraphResponse): GraphIndex {
+  const cached = graphIndexCache.get(graph);
+  if (cached) return cached;
+
+  const index = buildGraphIndex(graph);
+  graphIndexCache.set(graph, index);
+  return index;
+}
+
 function childrenFromIndex(
   index: GraphIndex,
   id: string,
@@ -95,7 +108,7 @@ export function childrenOf(
   id: string,
   edgeType?: GraphEdgeDTO["type"],
 ): GraphNodeDTO[] {
-  return childrenFromIndex(buildGraphIndex(graph), id, edgeType);
+  return childrenFromIndex(graphIndexFor(graph), id, edgeType);
 }
 
 /** Parent of a node (first incoming edge of the given type). */
@@ -104,7 +117,7 @@ export function parentOf(
   id: string,
   edgeType?: GraphEdgeDTO["type"],
 ): GraphNodeDTO | undefined {
-  const index = buildGraphIndex(graph);
+  const index = graphIndexFor(graph);
   const edge = (index.incomingEdgesByNodeId.get(id) ?? []).find(
     (candidate) => !edgeType || candidate.type === edgeType,
   );
@@ -131,7 +144,7 @@ export function buildFlowGraph(
   edges: Edge[];
 } {
   const compact = density === "compact";
-  const index = buildGraphIndex(graph);
+  const index = graphIndexFor(graph);
   const children = (id: string, edgeType?: GraphEdgeDTO["type"]) =>
     childrenFromIndex(index, id, edgeType);
   const ordered: GraphNodeDTO[] = [];

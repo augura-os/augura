@@ -46,16 +46,56 @@ const COLUMN_X: Record<GraphNodeType, number> = {
 
 const Y_STEP = 84;
 
+interface GraphIndex {
+  nodesById: Map<string, GraphNodeDTO>;
+  outgoingEdgesByNodeId: Map<string, GraphEdgeDTO[]>;
+  incomingEdgesByNodeId: Map<string, GraphEdgeDTO[]>;
+}
+
+/** Build both directions once so graph traversals only inspect relevant edges. */
+function buildGraphIndex(graph: GraphResponse): GraphIndex {
+  const nodesById = new Map<string, GraphNodeDTO>();
+  for (const node of graph.nodes) {
+    // Match Array.find's first-match behavior if malformed input has duplicate ids.
+    if (!nodesById.has(node.id)) nodesById.set(node.id, node);
+  }
+
+  const outgoingEdgesByNodeId = new Map<string, GraphEdgeDTO[]>();
+  const incomingEdgesByNodeId = new Map<string, GraphEdgeDTO[]>();
+  for (const edge of graph.edges) {
+    const outgoing = outgoingEdgesByNodeId.get(edge.source) ?? [];
+    outgoing.push(edge);
+    outgoingEdgesByNodeId.set(edge.source, outgoing);
+
+    const incoming = incomingEdgesByNodeId.get(edge.target) ?? [];
+    incoming.push(edge);
+    incomingEdgesByNodeId.set(edge.target, incoming);
+  }
+
+  return { nodesById, outgoingEdgesByNodeId, incomingEdgesByNodeId };
+}
+
+function childrenFromIndex(
+  index: GraphIndex,
+  id: string,
+  edgeType?: GraphEdgeDTO["type"],
+): GraphNodeDTO[] {
+  const children: GraphNodeDTO[] = [];
+  for (const edge of index.outgoingEdgesByNodeId.get(id) ?? []) {
+    if (edgeType && edge.type !== edgeType) continue;
+    const child = index.nodesById.get(edge.target);
+    if (child) children.push(child);
+  }
+  return children;
+}
+
 /** Children of a node, optionally filtered by edge type. */
 export function childrenOf(
   graph: GraphResponse,
   id: string,
   edgeType?: GraphEdgeDTO["type"],
 ): GraphNodeDTO[] {
-  return graph.edges
-    .filter((edge) => edge.source === id && (!edgeType || edge.type === edgeType))
-    .map((edge) => graph.nodes.find((node) => node.id === edge.target))
-    .filter((node): node is GraphNodeDTO => Boolean(node));
+  return childrenFromIndex(buildGraphIndex(graph), id, edgeType);
 }
 
 /** Parent of a node (first incoming edge of the given type). */
@@ -64,10 +104,11 @@ export function parentOf(
   id: string,
   edgeType?: GraphEdgeDTO["type"],
 ): GraphNodeDTO | undefined {
-  const edge = graph.edges.find(
-    (candidate) => candidate.target === id && (!edgeType || candidate.type === edgeType),
+  const index = buildGraphIndex(graph);
+  const edge = (index.incomingEdgesByNodeId.get(id) ?? []).find(
+    (candidate) => !edgeType || candidate.type === edgeType,
   );
-  return edge ? graph.nodes.find((node) => node.id === edge.source) : undefined;
+  return edge ? index.nodesById.get(edge.source) : undefined;
 }
 
 /**
@@ -90,6 +131,9 @@ export function buildFlowGraph(
   edges: Edge[];
 } {
   const compact = density === "compact";
+  const index = buildGraphIndex(graph);
+  const children = (id: string, edgeType?: GraphEdgeDTO["type"]) =>
+    childrenFromIndex(index, id, edgeType);
   const ordered: GraphNodeDTO[] = [];
   const seen = new Set<string>();
 
@@ -110,12 +154,8 @@ export function buildFlowGraph(
       const STRUCTURAL = new Set(["HAS_VARIANT", "HAS_ASSET", "HAS_TAG"]);
       while (queue.length > 0) {
         const current = queue.pop()!;
-        for (const edge of graph.edges) {
-          if (
-            STRUCTURAL.has(edge.type) &&
-            edge.source === current &&
-            !excluded.has(edge.target)
-          ) {
+        for (const edge of index.outgoingEdgesByNodeId.get(current) ?? []) {
+          if (STRUCTURAL.has(edge.type) && !excluded.has(edge.target)) {
             excluded.add(edge.target);
             queue.push(edge.target);
           }
@@ -137,23 +177,23 @@ export function buildFlowGraph(
 
   const visitAsset = (asset: GraphNodeDTO) => {
     push(asset);
-    for (const tag of childrenOf(graph, asset.id, "HAS_TAG")) push(tag);
+    for (const tag of children(asset.id, "HAS_TAG")) push(tag);
   };
 
   const visitVariant = (variant: GraphNodeDTO) => {
     push(variant);
     if (compact) return;
-    for (const asset of childrenOf(graph, variant.id, "HAS_ASSET")) visitAsset(asset);
+    for (const asset of children(variant.id, "HAS_ASSET")) visitAsset(asset);
   };
 
   const visitCreative = (creative: GraphNodeDTO) => {
     push(creative);
-    for (const variant of childrenOf(graph, creative.id, "HAS_VARIANT")) visitVariant(variant);
+    for (const variant of children(creative.id, "HAS_VARIANT")) visitVariant(variant);
   };
 
   const visitDna = (dna: GraphNodeDTO) => {
     push(dna);
-    for (const creative of childrenOf(graph, dna.id, "HAS_CREATIVE")) visitCreative(creative);
+    for (const creative of children(dna.id, "HAS_CREATIVE")) visitCreative(creative);
   };
 
   const dnas = graph.nodes

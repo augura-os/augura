@@ -89,6 +89,15 @@ class ReviewItem(BaseModel):
     family: FamilyProposal | None = None
     # 规则词建议（kind="rule_keyword" 时携带）
     rule_keyword: RuleKeywordProposal | None = None
+    observation_status: str | None = None
+    observation_waiting_reason: str | None = None
+    next_evaluation_at: datetime | None = None
+    observation_evidence: dict[str, object] = Field(default_factory=dict)
+
+
+class ObservationPage(BaseModel):
+    items: list[ReviewItem] = Field(default_factory=list)
+    total: int = 0
 
 
 class JudgeKindStats(BaseModel):
@@ -147,7 +156,11 @@ class ReviewQueue(BaseModel):
     merge_candidates: list[ReviewItem] = Field(default_factory=list)
     # 合并候选总对数（三通道合计去重；merge_candidates 只是前 merge_limit 条）
     merge_candidates_total: int = 0
+    # 默认仅含 actionable；后台观察只给数量，不进人工角标。
     observation_pairs: list[ReviewItem] = Field(default_factory=list)
+    observing_pairs_total: int = 0
+    observation_sync_status: str = "unknown"
+    observation_sync_error: str | None = None
     pending_verdicts: list[ReviewItem] = Field(default_factory=list)
     derivation_reviews: list[ReviewItem] = Field(default_factory=list)
     # 建议归档（score 低于阈值且长期无消耗；人工确认才置 archived）

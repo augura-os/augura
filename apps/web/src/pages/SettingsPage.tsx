@@ -390,6 +390,10 @@ export default function SettingsPage() {
     updateMutation.mutate({ merge_auto_enabled: enabled });
   };
 
+  const onToggleObservationAuto = (enabled: boolean) => {
+    updateMutation.mutate({ observation_auto_close_enabled: enabled });
+  };
+
   const onToggleLifecycleAuto = (enabled: boolean) => {
     updateMutation.mutate({ lifecycle_auto_enabled: enabled });
   };
@@ -1190,6 +1194,16 @@ export default function SettingsPage() {
                 onChange={(event) => onToggleMergeAuto(event.target.checked)}
               />
               {t("settings.autojudge.allowMerge")}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-neutral-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-neutral-900"
+                checked={data?.observation_auto_close_enabled ?? false}
+                disabled={updateMutation.isPending}
+                onChange={(event) => onToggleObservationAuto(event.target.checked)}
+              />
+              {t("settings.autojudge.allowObservationClose")}
             </label>
           </CardContent>
         </Card>

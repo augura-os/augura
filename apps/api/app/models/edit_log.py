@@ -2,7 +2,8 @@
 
 AI output is always overridable by humans, and each override is the
 training signal a future Learning Agent needs: field, old value, new
-value, when. Nothing here is ever written by the AI pipeline itself.
+value, when. Automatic decisions use an ``auto:`` prefix so later human
+corrections remain distinguishable from machine actions.
 """
 
 from __future__ import annotations

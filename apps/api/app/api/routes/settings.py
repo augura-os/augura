@@ -119,6 +119,9 @@ def get_settings_info(db: DbDep, settings: SettingsDep) -> Envelope[SettingsInfo
             telemetry_enabled=enabled_raw != "false",  # 默认开启（PRIVACY.md §1.1）
             telemetry_instance_id=_resolve_instance_id(repo, db.commit),
             merge_auto_enabled=repo.get(MERGE_AUTO_ENABLED_SETTING) != "false",  # 默认开
+            observation_auto_close_enabled=(
+                repo.get("observation_auto_close_enabled") == "true"
+            ),
             metric_profile=metric_config.profile,
             judge_metrics=metric_config.judge_metrics,
             metric_thresholds=metric_config.thresholds,
@@ -185,6 +188,11 @@ def update_settings(
         repo.set(
             MERGE_AUTO_ENABLED_SETTING,
             "true" if payload.merge_auto_enabled else "false",
+        )
+    if payload.observation_auto_close_enabled is not None:
+        repo.set(
+            "observation_auto_close_enabled",
+            "true" if payload.observation_auto_close_enabled else "false",
         )
     if payload.metric_profile is not None:
         unknown = [m for m in payload.metric_profile if m not in DISPLAY_METRICS]

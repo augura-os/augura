@@ -1,7 +1,7 @@
 """观察对（维持拆分登记）的服务层。
 
 POST /graph/similar 单条与 POST /graph/similar/bulk 批量共用同一登记语义
-（Neo4j SIMILAR_TO 边 + field="observation_pair" 的 edit_log 留痕），路由
+（Neo4j SIMILAR_TO 边 + SQL 后台观察状态 + edit_log 留痕），路由
 只做参数解析与 commit / rebuild_mirror 收口。本模块一律不 commit。
 """
 
@@ -18,7 +18,7 @@ from app.models import Creative
 from app.repositories.creatives import CreativeRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.schemas.batch import BatchItemResult, BatchResult, collect
-from app.services import graph_sync, merge_guard
+from app.services import graph_sync, merge_guard, observation_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,13 @@ def link_observation_pair_tx(
     target: Creative,
     reason: str = "",
 ) -> None:
-    """Neo4j SIMILAR_TO + edit_log 留痕；不 commit（调用方统一收口）。"""
+    """Neo4j 关系 + SQL 后台观察状态 + edit_log；调用方统一提交。"""
+    now = observation_lifecycle.utcnow()
+    pair = observation_lifecycle.get_or_create_pair(
+        db, source.id, target.id, registered_at=now
+    )
+    if pair.status == observation_lifecycle.RESOLVED_SPLIT:
+        raise ApiError(409, "该对已结案维持拆分")
     try:
         graph_sync.get_graph_repository(settings).link_similar(
             source.id, target.id, reason
@@ -53,6 +59,11 @@ def link_observation_pair_tx(
     except Exception as exc:  # noqa: BLE001
         raise ApiError(502, f"Neo4j 观察对建立失败：{exc}") from exc
 
+    pair.status = observation_lifecycle.OBSERVING
+    pair.registered_at = pair.registered_at or now
+    pair.evidence_start_at = pair.evidence_start_at or now.date()
+    pair.waiting_reason = "awaiting_evaluation"
+    pair.next_evaluation_at = now
     EditLogRepository(db).record(
         entity_type="creative",
         entity_id=target.id,
@@ -106,7 +117,9 @@ def run_bulk_similar(
                         message="已是观察对",
                     )
                 else:
-                    ruling = merge_guard.find_db_ruling(db, source.name, target.name)
+                    ruling = merge_guard.find_db_ruling(
+                        db, source.name, target.name, source.id, target.id
+                    )
                     if ruling is not None:
                         item = BatchItemResult(
                             id=item_id, status="skipped", reason="conflict",

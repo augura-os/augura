@@ -66,9 +66,23 @@ def find_prior_ruling(name_a: str, name_b: str) -> dict[str, object] | None:
 
 
 def find_db_ruling(
-    db: Session, name_a: str, name_b: str
+    db: Session,
+    name_a: str,
+    name_b: str,
+    creative_id_a: str | None = None,
+    creative_id_b: str | None = None,
 ) -> SplitRuling | None:
-    """收件箱结案沉淀的拆分裁决（split_rulings 表，名称无序对匹配）。"""
+    """优先按稳定 ID 匹配，旧记录回退到名称无序对。"""
+    if creative_id_a and creative_id_b:
+        left_id, right_id = sorted((creative_id_a, creative_id_b))
+        by_id = db.scalar(
+            select(SplitRuling).where(
+                SplitRuling.creative_id_a == left_id,
+                SplitRuling.creative_id_b == right_id,
+            )
+        )
+        if by_id is not None:
+            return by_id
     low, high = sorted((name_a, name_b))
     return db.scalar(
         select(SplitRuling).where(
@@ -95,7 +109,7 @@ def check_merge(
             )
         )
     if db is not None:
-        db_ruling = find_db_ruling(db, source.name, target.name)
+        db_ruling = find_db_ruling(db, source.name, target.name, source.id, target.id)
         if db_ruling is not None:
             age_days = (
                 datetime.now(timezone.utc) - db_ruling.created_at

@@ -11,6 +11,7 @@ from app.models.graph import GraphEdge, GraphNode
 from app.models.idempotency import IdempotencyKey
 from app.models.job import AnalysisJob
 from app.models.judge import JudgeSuggestion
+from app.models.observation import ObservationEvaluation, ObservationPair
 from app.models.project import Project
 from app.models.ruling import SplitRuling
 from app.models.setting import Setting
@@ -31,6 +32,8 @@ __all__ = [
     "GraphNode",
     "IdempotencyKey",
     "JudgeSuggestion",
+    "ObservationEvaluation",
+    "ObservationPair",
     "Performance",
     "Project",
     "Setting",

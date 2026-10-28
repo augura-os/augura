@@ -158,6 +158,8 @@ def recover_on_startup() -> None:
             logger.info("孤儿素材补建：%d 个 pending 素材重新入队", len(orphans))
         db.commit()
 
+    run_observation_cycle()
+
 
 def _execute_job(job_id: str) -> None:
     """工作线程入口：跑 pipeline，按异常分类落终态/重试。"""
@@ -252,6 +254,26 @@ def reap_expired_leases() -> int:
     return requeued
 
 
+def run_observation_cycle() -> None:
+    from app.repositories.settings import SettingsRepository
+    from app.services import observation_lifecycle, observation_runner
+
+    with SessionLocal() as db:
+        try:
+            stats = observation_lifecycle.sync_graph_pairs(db, get_settings())
+            evaluated = observation_runner.run_observation_evaluations(db, get_settings())
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            SettingsRepository(db).set("observation_sync_status", "error")
+            SettingsRepository(db).set("observation_sync_error", type(exc).__name__)
+            logger.warning("观察对周期评估失败", exc_info=True)
+        else:
+            SettingsRepository(db).set("observation_sync_status", "ok")
+            SettingsRepository(db).set("observation_sync_error", "")
+            logger.info("观察对同步 %s；评估 %s", stats, evaluated)
+        db.commit()
+
+
 def run_forever() -> None:
     settings = get_settings()
     worker_id = f"{socket.gethostname()}-{os.getpid()}"
@@ -263,6 +285,7 @@ def run_forever() -> None:
     )
     max_workers = max(1, settings.analysis_concurrency)
     last_reap = time.monotonic()
+    last_observation = last_reap
     with ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="analysis"
     ) as pool:
@@ -284,6 +307,9 @@ def run_forever() -> None:
                 if time.monotonic() - last_reap >= REAPER_SECONDS:
                     last_reap = time.monotonic()
                     reap_expired_leases()
+                if time.monotonic() - last_observation >= 300:
+                    last_observation = time.monotonic()
+                    run_observation_cycle()
                 time.sleep(POLL_SECONDS)
             except Exception:  # noqa: BLE001 — 主循环永不退出
                 logger.exception("worker 主循环出错，%ss 后重试", ERROR_BACKOFF_SECONDS)

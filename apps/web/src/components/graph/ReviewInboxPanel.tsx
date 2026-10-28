@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, Inbox, Plus, Sparkles, X } from "lucide-react";
 import type { DerivationFactor, ReviewItem, ReviewKind } from "@shared";
 import { useReviewQueue } from "../../hooks/useReviewQueue";
@@ -25,6 +25,7 @@ import {
   deleteDerivation,
   dismissFamily,
   dismissRuleKeyword,
+  fetchObservations,
   linkSimilar,
   linkSimilarBulk,
   mergeCreatives,
@@ -65,6 +66,43 @@ const BATCHABLE_KINDS: ReadonlySet<ReviewKind> = new Set([
 
 /** 合并候选客户端分页页大小（对） */
 const MERGE_PAGE_SIZE = 20;
+const OBSERVATION_PAGE_SIZE = 50;
+const OBSERVATION_WAITING_REASONS: ReadonlySet<string> = new Set([
+  "awaiting_evaluation",
+  "insufficient_evidence",
+  "incomparable_objective",
+  "incomparable_window",
+  "incomparable_market",
+  "no_recent_data",
+  "content_evidence_incomplete",
+  "auto_policy_uncertified",
+  "unstable_evidence",
+  "auto_close_disabled",
+  "manual_reopen",
+]);
+const OBSERVATION_REASON_GROUPS: Record<string, string> = {
+  registration_missing: "insufficient_evidence",
+  evidence_start_missing: "insufficient_evidence",
+  no_performance_data: "no_recent_data",
+  no_post_registration_data: "no_recent_data",
+  invalid_performance_data: "insufficient_evidence",
+  zero_results: "insufficient_evidence",
+  insufficient_spend: "insufficient_evidence",
+  insufficient_results: "insufficient_evidence",
+  insufficient_chronological_halves: "insufficient_evidence",
+  insufficient_half_data: "insufficient_evidence",
+  effect_below_minimum: "insufficient_evidence",
+  msprt_not_crossed: "insufficient_evidence",
+  unknown_objective: "incomparable_objective",
+  mixed_objectives: "incomparable_objective",
+  objective_mismatch: "incomparable_objective",
+  unsupported_objective: "incomparable_objective",
+  market_unknown: "incomparable_market",
+  mixed_markets: "incomparable_market",
+  market_mismatch: "incomparable_market",
+  unstable_halves: "unstable_evidence",
+  uncertified_policy: "auto_policy_uncertified",
+};
 
 const KIND_DOT: Record<ReviewKind, string> = {
   auto_brake: "bg-red-600",
@@ -210,6 +248,7 @@ function MergeActions({ item }, ref) {
   } | null>(null);
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+    void queryClient.invalidateQueries({ queryKey: ["review-observations"] });
     void queryClient.invalidateQueries({ queryKey: ["graph"] });
     void queryClient.invalidateQueries({ queryKey: ["recommendations"] });
   };
@@ -822,6 +861,7 @@ function ClosePairActions({ item }: { item: ReviewItem }) {
     onSuccess: () => {
       setDone(t("inbox.close.closed"));
       void queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["review-observations"] });
       void queryClient.invalidateQueries({ queryKey: ["graph"] });
     },
   });
@@ -853,6 +893,58 @@ function ClosePairActions({ item }: { item: ReviewItem }) {
         <span className="text-[11px] text-red-500">{t("common.failedRetry")}</span>
       ) : null}
     </span>
+  );
+}
+
+function BackgroundObservationCard({
+  item,
+  onSelectCreative,
+}: {
+  item: ReviewItem;
+  onSelectCreative: (creativeNodeId: string) => void;
+}) {
+  const t = useT();
+  const waitingReason = item.observation_waiting_reason;
+  const waitingKey = waitingReason
+    ? OBSERVATION_REASON_GROUPS[waitingReason] ?? waitingReason
+    : null;
+  const waitingText =
+    waitingKey && OBSERVATION_WAITING_REASONS.has(waitingKey)
+      ? t(`inbox.observation.waiting.${waitingKey}`)
+      : waitingReason || t("inbox.observation.waiting.fallback");
+  const nextEvaluationDate = item.next_evaluation_at
+    ? new Date(item.next_evaluation_at)
+    : null;
+  const nextEvaluation = nextEvaluationDate
+    ? Number.isNaN(nextEvaluationDate.getTime())
+      ? item.next_evaluation_at
+      : nextEvaluationDate.toLocaleString()
+    : null;
+  return (
+    <li className="rounded-xl bg-sky-50/40 px-3 py-2 transition hover:bg-sky-50/70">
+      <button
+        onClick={() =>
+          item.creative_id && onSelectCreative(`creative:${item.creative_id}`)
+        }
+        className="w-full text-left"
+      >
+        <span
+          className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900"
+          title={item.title}
+        >
+          {inboxTitleLine(item, t)}
+        </span>
+      </button>
+      <span className="mt-0.5 block text-xs leading-relaxed text-neutral-500">
+        {waitingText}
+      </span>
+      {nextEvaluation ? (
+        <span className="mt-0.5 block text-[11px] leading-relaxed text-neutral-400">
+          {t("inbox.observation.nextEvaluation").replace("{time}", nextEvaluation)}
+        </span>
+      ) : null}
+      <ClosePairActions item={item} />
+    </li>
   );
 }
 
@@ -1133,7 +1225,30 @@ export function ReviewInboxPanel({
   const { data: dnas } = useDnas();
   const [collapsed, setCollapsed] = useState(true);
   const [showNewFamily, setShowNewFamily] = useState(false);
+  const [showObservations, setShowObservations] = useState(false);
+  const [observationPage, setObservationPage] = useState(0);
   const queryClient = useQueryClient();
+  const observingPairsTotal = data?.observing_pairs_total ?? 0;
+  const observationsQuery = useQuery({
+    queryKey: ["review-observations", observationPage],
+    queryFn: () =>
+      fetchObservations(
+        OBSERVATION_PAGE_SIZE,
+        observationPage * OBSERVATION_PAGE_SIZE,
+      ),
+    enabled: showObservations && !collapsed && observingPairsTotal > 0,
+  });
+  const observationTotal = observationsQuery.data?.total ?? observingPairsTotal;
+  const observationPageCount = Math.max(
+    1,
+    Math.ceil(observationTotal / OBSERVATION_PAGE_SIZE),
+  );
+  const observationPageIndex = Math.min(observationPage, observationPageCount - 1);
+  useEffect(() => {
+    if (observationPage !== observationPageIndex) {
+      setObservationPage(observationPageIndex);
+    }
+  }, [observationPage, observationPageIndex]);
   const [bootstrapHint, setBootstrapHint] = useState<string | null>(null);
   // --- 批量操作状态（契约 §2.5） ---------------------------------------------
   // selectedKeys：四元组序列化 key 集合；removedKeys：批量 success/skipped 后
@@ -1464,6 +1579,33 @@ export function ReviewInboxPanel({
           </button>
         </div>
       </div>
+      {observingPairsTotal > 0 ? (
+        <div className="flex px-5 pb-2">
+          <button
+            onClick={() => setShowObservations((open) => !open)}
+            aria-expanded={showObservations}
+            className="rounded-full bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-600 transition hover:bg-sky-100"
+          >
+            {t("inbox.observation.background").replace(
+              "{n}",
+              String(observingPairsTotal),
+            )}
+          </button>
+        </div>
+      ) : null}
+      {data.observation_sync_status === "error" ? (
+        <p
+          role="status"
+          className="mx-5 mb-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
+        >
+          {t("inbox.observation.syncError")}
+          {data.observation_sync_error ? (
+            <span className="mt-0.5 block break-all text-amber-700">
+              {data.observation_sync_error}
+            </span>
+          ) : null}
+        </p>
+      ) : null}
       {showNewFamily ? (
         <NewFamilyForm onClose={() => setShowNewFamily(false)} />
       ) : null}
@@ -1512,6 +1654,72 @@ export function ReviewInboxPanel({
         tabIndex={0}
         onKeyDown={handleMergeKeyDown}
       >
+        {showObservations && observingPairsTotal > 0 ? (
+          <section aria-label={t("inbox.observation.title")}>
+            <p className="mb-1.5 flex items-center gap-1.5 px-2 text-xs font-semibold text-neutral-600">
+              <span className={cn("h-2 w-2 rounded-full", KIND_DOT.observation_pair)} />
+              {t("inbox.observation.title")} · {observationTotal}
+            </p>
+            {observationsQuery.isPending ? (
+              <p className="px-2 py-3 text-center text-xs text-neutral-400">
+                {t("inbox.observation.loading")}
+              </p>
+            ) : observationsQuery.isError ? (
+              <p className="mx-2 flex items-center justify-between gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-600">
+                {t("inbox.observation.loadFailed")}
+                <button
+                  onClick={() => void observationsQuery.refetch()}
+                  className="shrink-0 rounded bg-white/70 px-1.5 py-0.5 font-medium transition hover:bg-white"
+                >
+                  {t("inbox.observation.retry")}
+                </button>
+              </p>
+            ) : (
+              <>
+                {(observationsQuery.data?.items.length ?? 0) > 0 ? (
+                  <ul className="space-y-1">
+                    {observationsQuery.data?.items.map((item) => (
+                      <BackgroundObservationCard
+                        key={`${item.creative_id}-${item.related_creative_id}`}
+                        item={item}
+                        onSelectCreative={onSelectCreative}
+                      />
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="px-2 py-3 text-center text-xs text-neutral-400">
+                    {t("inbox.observation.empty")}
+                  </p>
+                )}
+                {observationPageCount > 1 ? (
+                  <div className="mx-2 mt-1.5 flex items-center justify-between text-[11px] text-neutral-500">
+                    <button
+                      disabled={observationPageIndex === 0}
+                      onClick={() => setObservationPage(observationPageIndex - 1)}
+                      className="flex items-center gap-0.5 rounded px-1 py-0.5 transition hover:bg-black/5 disabled:opacity-40"
+                    >
+                      <ChevronLeft className="h-3 w-3" />
+                      {t("review.merge.pagePrev")}
+                    </button>
+                    <span>
+                      {t("review.merge.pageInfo")
+                        .replace("{page}", String(observationPageIndex + 1))
+                        .replace("{pages}", String(observationPageCount))}
+                    </span>
+                    <button
+                      disabled={observationPageIndex >= observationPageCount - 1}
+                      onClick={() => setObservationPage(observationPageIndex + 1)}
+                      className="flex items-center gap-0.5 rounded px-1 py-0.5 transition hover:bg-black/5 disabled:opacity-40"
+                    >
+                      {t("review.merge.pageNext")}
+                      <ChevronRight className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </section>
+        ) : null}
         {total === 0 ? (
           <p className="px-2 py-8 text-center text-sm text-neutral-400">
             {t("inbox.empty")}

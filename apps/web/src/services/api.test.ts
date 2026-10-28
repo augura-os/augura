@@ -8,7 +8,7 @@ vi.mock("../services/client", () => ({
 }));
 
 import { setLang } from "../lib/i18n";
-import { createLabDiagnosis, getLabAnalysis } from "./api";
+import { createLabDiagnosis, fetchObservations, getLabAnalysis } from "./api";
 
 function okEnvelope(data: Partial<LabDiagnosis> = {}) {
   return {
@@ -89,5 +89,21 @@ describe("getLabAnalysis", () => {
 
     await getLabAnalysis("asset-1", "zh");
     expect(mocks.get).toHaveBeenCalledWith("/lab/analysis/asset-1", { params: { lang: "zh" } });
+  });
+});
+
+describe("fetchObservations", () => {
+  beforeEach(() => {
+    mocks.get.mockReset();
+    mocks.get.mockResolvedValue({
+      data: { success: true, message: "", data: { items: [], total: 121 } },
+    });
+  });
+
+  it("requests only observing pairs with the requested page offset", async () => {
+    await expect(fetchObservations(50, 100)).resolves.toEqual({ items: [], total: 121 });
+    expect(mocks.get).toHaveBeenCalledWith("/review/observations", {
+      params: { status: "observing", limit: 50, offset: 100 },
+    });
   });
 });

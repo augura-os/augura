@@ -45,7 +45,7 @@ from app.services.embedding import EMBEDDING_RECALL_TOP_K
 from app.services.judge_calibration import judge_auto_allowed
 from app.services.judge_suggestions import delete_suggestion, upsert_suggestion
 from app.services.merge_guard import find_prior_ruling
-from app.services.merge_judge import judge_pair
+from app.services.merge_judge import PairEvidence, evidence_from_analysis, judge_pair
 from app.services.merge_measure import (
     AUTO_MERGE_DERIVATION_FACTORS,
     MIN_ALIGNED_FRACTION_FOR_AUTO,
@@ -105,7 +105,8 @@ class ScanStats:
 
 
 def _analysis_texts(db: Session) -> dict[str, str]:
-    """creative_id → 首个分析的 hook+gameplay 拼接文本。"""
+    """creative_id → 首个分析的 hook+gameplay 拼接文本（召回打分的口径，
+    阈值按此文本调过，勿混入其他字段）。"""
     rows = db.execute(
         text(
             "select v.creative_id, a.hook, a.gameplay from analysis_results a "
@@ -118,6 +119,31 @@ def _analysis_texts(db: Session) -> dict[str, str]:
         if creative_id not in texts:
             texts[creative_id] = f"{hook or ''} {gameplay or ''}"
     return texts
+
+
+def _analysis_evidence(db: Session) -> dict[str, PairEvidence]:
+    """creative_id → 首个分析的三视角证据（merge-judge-v2）。"""
+    rows = db.execute(
+        text(
+            "select v.creative_id, a.summary, a.hook, a.conflict, a.gameplay, "
+            "a.reward, a.characters, a.environment, a.emotion, a.tags, "
+            "a.variant_factors from analysis_results a "
+            "join creative_variants v on v.asset_id = a.asset_id "
+            "order by a.created_at"
+        )
+    ).fetchall()
+    evidence: dict[str, PairEvidence] = {}
+    for row in rows:
+        creative_id = row[0]
+        if creative_id not in evidence:
+            keys = (
+                "summary", "hook", "conflict", "gameplay", "reward",
+                "characters", "environment", "emotion", "tags", "variant_factors",
+            )
+            evidence[creative_id] = evidence_from_analysis(
+                dict(zip(keys, row[1:], strict=True))
+            )
+    return evidence
 
 
 def _visual_signatures(
@@ -247,9 +273,11 @@ def recall_pairs(
     analysis_texts = _analysis_texts(db)
 
     def text_score(a: Creative, b: Creative) -> float:
-        return 0.6 * review_service._filtered_similarity(
+        # 名字只占 0.3（前贴钩子锚定偏差，10-21 盘点约 40% 名字钩子词主导）；
+        # 玩法本体看 representative_text；边界带阈值由 B2 回测重新校准
+        return 0.3 * review_service._filtered_similarity(
             a.name, b.name, generic_tokens
-        ) + 0.4 * review_service._filtered_similarity(
+        ) + 0.7 * review_service._filtered_similarity(
             a.representative_text or a.name,
             b.representative_text or b.name,
             generic_tokens,
@@ -375,7 +403,8 @@ def scan_missed_merges(
         and (SettingsRepository(db).get("merge_auto_enabled") or "true") != "false"  # 默认开
     )
 
-    analysis_texts = _analysis_texts(db)
+    analysis_evidence = _analysis_evidence(db)
+    card_cache: dict = {}  # v4：指纹卡按证据哈希缓存，本批次内共享
     alive = set(db.scalars(select(Creative.id)).all())
     for pair in pairs:
         # 前面的自动合并可能已经吃掉其中一方（传递闭包链式合并）——跳过
@@ -386,24 +415,32 @@ def scan_missed_merges(
         emit(f"recall {title}（{pair.evidence}）")
         if recall_only:
             continue
+        # 缺分析的 creative 给空证据：judge_pair 内所有视角弃权 → 自然灰区
+        evidence_a = analysis_evidence.get(pair.left.id) or PairEvidence()
+        evidence_b = analysis_evidence.get(pair.right.id) or PairEvidence()
         judgement = judge_pair(
             config,
-            analysis_a=analysis_texts.get(pair.left.id, ""),
-            analysis_b=analysis_texts.get(pair.right.id, ""),
+            evidence_a=evidence_a,
+            evidence_b=evidence_b,
+            card_cache=card_cache,
         )
         if judgement is None:
             stats.no_ruling += 1
-            emit("       判定: 无（LLM 不可用或票数不足）")
+            emit("       判定: 无（LLM 不可用、打卡失败或骨架库外新结构）")
             continue
         if not judgement.same_creative:
             stats.judged_split += 1
-            emit(f"       判定: split ({judgement.votes}/3) :: {judgement.reason[:40]}")
+            emit(
+                f"       判定: {judgement.relation} ({judgement.votes} 视角) "
+                f":: {judgement.reason[:40]}"
+            )
             if not dry_run:
                 upsert_suggestion(
                     db, kind="merge_pair", left_id=pair.left.id,
                     right_id=pair.right.id, verdict="split",
                     votes=judgement.votes,
                     reason=f"{judgement.reason}（{pair.evidence}）",
+                    reason_params=judgement.reason_params(),
                 )
                 stats.suggested += 1
                 if commit:
@@ -458,11 +495,12 @@ def scan_missed_merges(
                 right_id=pair.right.id, verdict="merge",
                 votes=judgement.votes,
                 reason=f"{judgement.reason}（{pair.evidence}）",
+                reason_params=judgement.reason_params(),
             )
             stats.suggested += 1
             if commit:
                 db.commit()  # 对级短事务：同上
-        emit(f"       判定: merge ({judgement.votes}/3) → 建议")
+        emit(f"       判定: merge ({judgement.votes} 视角) → 建议")
     if commit:
         db.commit()  # 收尾：孤儿清理等零散写入（零召回对时也要落库）
     return stats

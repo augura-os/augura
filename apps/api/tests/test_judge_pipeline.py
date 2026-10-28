@@ -134,8 +134,8 @@ class TestScopedMergeJudgements:
         db_session.flush()
         monkeypatch.setattr(
             judge_pipeline, "judge_pair",
-            lambda config, *, analysis_a, analysis_b: MergeJudgement(
-                same_creative=False, votes=3, reason="不同创意",
+            lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
+                relation="different_concept", votes=3, reason="不同创意",
             ),
         )
         judge_pipeline.run_merge_judgements(
@@ -186,8 +186,8 @@ class TestAutoMergeExecute:
         first, second = self._setup_pair(db)
         monkeypatch.setattr(
             judge_pipeline, "judge_pair",
-            lambda config, *, analysis_a, analysis_b: MergeJudgement(
-                same_creative=True, votes=votes, reason="同一创意换皮",
+            lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
+                relation="same_variant_family", votes=votes, reason="同一创意换皮",
             ),
         )
         monkeypatch.setattr(

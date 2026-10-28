@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import cast
+from typing import Annotated, cast
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from graph import make_node_id
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import load_mirror, rebuild_mirror
 from app.repositories.tags import COMPETITOR_REFERENCE_TAG, TagRepository
+from app.schemas.batch import BatchResult
 from app.schemas.common import Envelope, ok
 from app.schemas.graph import (
     GraphEdgeOut,
@@ -32,11 +33,12 @@ from app.schemas.graph import (
     GraphNodeType,
     GraphOut,
     MergeRequest,
+    SimilarBulkRequest,
     SimilarCloseRequest,
     SimilarRequest,
     SplitRequest,
 )
-from app.services import graph_sync, merge_ops
+from app.services import graph_sync, idempotency, merge_ops, observation_ops
 from app.services.clustering import mean_embeddings
 from app.services.embedding import recompute_creative_representative
 from app.services.pipeline import cleanup_creative_if_empty
@@ -204,34 +206,67 @@ def link_observation_pair(
     payload: SimilarRequest, db: DbDep, settings: SettingsDep
 ) -> Envelope[GraphOut]:
     """Register an observation pair (维持拆分) between two creatives."""
-    if payload.source_creative_id == payload.target_creative_id:
-        raise ApiError(400, "不能与自身建立观察对")
-    creative_repo = CreativeRepository(db)
-    source = creative_repo.get(payload.source_creative_id)
-    if source is None:
-        raise ApiError(404, f"Creative 不存在：{payload.source_creative_id}")
-    target = creative_repo.get(payload.target_creative_id)
-    if target is None:
-        raise ApiError(404, f"Creative 不存在：{payload.target_creative_id}")
-
-    try:
-        graph_sync.get_graph_repository(settings).link_similar(
-            source.id, target.id, payload.reason
-        )
-        graph_sync.invalidate_similar_pairs_cache()
-    except Exception as exc:  # noqa: BLE001
-        raise ApiError(502, f"Neo4j 观察对建立失败：{exc}") from exc
-
-    EditLogRepository(db).record(
-        entity_type="creative",
-        entity_id=target.id,
-        action="update",
-        field="observation_pair",
-        old_value="",
-        new_value=f"{source.name} ↔ {target.name} 维持拆分登记（{payload.reason}）",
+    source, target = observation_ops.get_pair(
+        db, payload.source_creative_id, payload.target_creative_id
+    )
+    observation_ops.link_observation_pair_tx(
+        db, settings, source, target, payload.reason
     )
     db.commit()
     return ok(_current_graph(db, settings), message="已登记观察对")
+
+
+# ----------------------------------------------------------------------
+# 批量登记观察对（P0b）：Idempotency-Key 必需，逐项 savepoint 隔离，
+# 末尾统一 rebuild_mirror 一次（无成功项不 rebuild）。同步执行不支持
+# 中途取消——前端可中断等待，后端继续跑完（契约 §2.1）。
+# ----------------------------------------------------------------------
+IdempotencyHeader = Annotated[str | None, Header(alias="Idempotency-Key")]
+
+
+def _replay(db: Session, *, key: str, endpoint: str) -> Envelope[BatchResult] | None:
+    """同 key 同 endpoint 的重复提交：直接返回首次存储的 response，不重复执行。"""
+    stored = idempotency.get_stored(db, key=key, endpoint=endpoint)
+    if stored is None:
+        return None
+    return ok(
+        BatchResult(**stored["data"]),
+        message=str(stored.get("message") or ""),
+    )
+
+
+@router.post("/graph/similar/bulk", response_model=Envelope[BatchResult])
+def bulk_link_observation_pairs(
+    payload: SimilarBulkRequest,
+    db: DbDep,
+    settings: SettingsDep,
+    idempotency_key: IdempotencyHeader = None,
+) -> Envelope[BatchResult]:
+    """批量登记观察对（维持拆分否决）；登记非破坏，不阻塞未来合并。"""
+    key = idempotency.require_key(idempotency_key)
+    replay = _replay(db, key=key, endpoint="similar-bulk")
+    if replay is not None:
+        return replay
+    result = observation_ops.run_bulk_similar(
+        db,
+        settings,
+        [(pair.creative_id, pair.related_creative_id) for pair in payload.pairs],
+    )
+    summary = result.summary
+    message = (
+        f"批量完成：成功 {summary.success} / "
+        f"跳过 {summary.skipped} / 失败 {summary.failed}"
+    )
+    idempotency.store_response(
+        db,
+        key=key,
+        endpoint="similar-bulk",
+        response={"data": result.model_dump(), "message": message},
+    )
+    db.commit()
+    if summary.success > 0:
+        rebuild_mirror(db)
+    return ok(result, message=message)
 
 
 @router.post("/graph/similar/close", response_model=Envelope[GraphOut])

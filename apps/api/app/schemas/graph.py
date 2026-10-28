@@ -46,6 +46,19 @@ class SimilarRequest(BaseModel):
     reason: str = ""
 
 
+class SimilarPairIn(BaseModel):
+    """批量观察对登记的单对输入（P0b 契约：creative_id + related_creative_id）。"""
+
+    creative_id: str
+    related_creative_id: str
+
+
+class SimilarBulkRequest(BaseModel):
+    """批量登记观察对（POST /graph/similar/bulk），单批上限 100。"""
+
+    pairs: list[SimilarPairIn] = Field(max_length=100)
+
+
 class SimilarCloseRequest(BaseModel):
     source_creative_id: str
     target_creative_id: str

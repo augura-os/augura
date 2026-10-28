@@ -563,7 +563,11 @@ def _run_analysis_pipeline(
                     local_video = str(downloaded)
 
         _update_job_stage(job_id, "cluster")
-        text_signature = f"{payload.creative_name} {' '.join(payload.tags)}"
+        # 代表文本含玩法本体：名字常有前贴钩子锚定偏差，召回/聚类的文本
+        # 通道需要 gameplay 压住钩子词（10-21 命名盘点后修订）
+        text_signature = (
+            f"{payload.creative_name} {' '.join(payload.tags)} {payload.gameplay}"
+        )
         creative, previous_creative_id = _cluster(
             db,
             asset,

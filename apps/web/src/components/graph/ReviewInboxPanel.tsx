@@ -1,14 +1,24 @@
-import { useMemo, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Inbox, Plus, Sparkles, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Inbox, Plus, Sparkles, X } from "lucide-react";
 import type { DerivationFactor, ReviewItem, ReviewKind } from "@shared";
 import { useReviewQueue } from "../../hooks/useReviewQueue";
 import { useDnas } from "../../hooks/useDnas";
 import {
   assignCreativeDna,
+  batchAssignDna,
   closeSimilarPair,
+  confirmFamiliesBatch,
   confirmFamily,
   confirmRuleKeyword,
   createDna,
@@ -16,10 +26,12 @@ import {
   dismissFamily,
   dismissRuleKeyword,
   linkSimilar,
+  linkSimilarBulk,
   mergeCreatives,
   suggestFamilies,
   updateDerivation,
   updateLifecycle,
+  type BatchResponse,
 } from "../../services/api";
 import { factorLabel } from "../../lib/short-name";
 import { apiErrorText } from "../../lib/apiErrorText";
@@ -27,8 +39,32 @@ import { apiErrorCode } from "../../services/client";
 import { useT } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { inboxReasonLine, inboxTitleLine } from "./inboxReason";
+import {
+  keyByItemId,
+  reduceBatchResults,
+  selectionKey,
+  type BatchFailure,
+} from "./inboxBatch";
+import {
+  clusterMergePairs,
+  keyByPairId,
+  mergeKeyAction,
+  moveFocusIndex,
+  paginateClusters,
+} from "./inboxMerge";
+import { MergePairPreview } from "./MergePairPreview";
 import { InterventionDensityWidget } from "./InterventionDensityWidget";
 import { HubSkewWidget } from "./HubSkewWidget";
+
+/** 契约 §3 + P0b：这三类条目支持多选 + 批量操作 */
+const BATCHABLE_KINDS: ReadonlySet<ReviewKind> = new Set([
+  "family_bootstrap",
+  "dna_unassigned",
+  "merge_candidate",
+]);
+
+/** 合并候选客户端分页页大小（对） */
+const MERGE_PAGE_SIZE = 20;
 
 const KIND_DOT: Record<ReviewKind, string> = {
   auto_brake: "bg-red-600",
@@ -100,32 +136,74 @@ function judgeStatsLine(
   return parts.join(" · ");
 }
 
-/** Two-step confirm: first click arms the button for 3s, second executes. */
+/**
+ * Two-step confirm: first click arms the button for 3s, second executes.
+ * 键盘流（P0b 加固）走 armOnly + confirm：arm 与 confirm 不由同一个键完成，
+ * 键盘上 ←/→/x 只预备，必须再按 Enter 才执行——同一键的重复触发
+ * （key repeat / 快速连按）无法走完 arm+confirm 两步。
+ */
 function useConfirm() {
   const [armed, setArmed] = useState<string | null>(null);
+  const pendingRef = useRef<{ key: string; execute: () => void } | null>(null);
+  const disarmIf = (key: string) => {
+    setArmed((current) => (current === key ? null : current));
+    if (pendingRef.current?.key === key) pendingRef.current = null;
+  };
   const arm = (key: string, execute: () => void) => {
     if (armed === key) {
       setArmed(null);
+      pendingRef.current = null;
       execute();
       return;
     }
+    pendingRef.current = { key, execute };
     setArmed(key);
-    setTimeout(() => setArmed((current) => (current === key ? null : current)), 3000);
+    setTimeout(() => disarmIf(key), 3000);
   };
-  return { armed, arm };
+  /** 只预备不执行：已 armed 同键时再按是 no-op（保持原 3s 倒计时） */
+  const armOnly = (key: string, execute: () => void) => {
+    if (armed === key) return;
+    pendingRef.current = { key, execute };
+    setArmed(key);
+    setTimeout(() => disarmIf(key), 3000);
+  };
+  /** 执行当前 armed 动作（键盘 Enter）；无 armed 时 no-op */
+  const confirm = () => {
+    const pending = pendingRef.current;
+    setArmed(null);
+    pendingRef.current = null;
+    pending?.execute();
+  };
+  const cancel = () => {
+    setArmed(null);
+    pendingRef.current = null;
+  };
+  return { armed, arm, armOnly, confirm, cancel };
 }
 
-function MergeActions({ item }: { item: ReviewItem }) {
+/** 键盘流（P0b 加固）通过 ref 触发卡片动作：←/→/x 只 arm（预备），
+ *  Enter 确认执行 armed 动作，Esc 取消 armed */
+export interface MergeActionsHandle {
+  armIntoLeft: () => void;
+  armIntoRight: () => void;
+  armNotSame: () => void;
+  confirmArmed: () => void;
+  cancelArmed: () => void;
+}
+
+const MergeActions = forwardRef<MergeActionsHandle, { item: ReviewItem }>(
+function MergeActions({ item }, ref) {
   const t = useT();
   const queryClient = useQueryClient();
-  const { armed, arm } = useConfirm();
+  const { armed, arm, armOnly, confirm, cancel } = useConfirm();
   const [done, setDone] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [blockMessage, setBlockMessage] = useState<string | null>(null);
   const [forceReason, setForceReason] = useState("");
-  // 素材预览弹层：imageFallback=true 时改用 <img>（图片素材走不通 <video>）
+  // 单侧预览（仅当素材只有一侧有预览图时兜底）；正常入口是双视频并排预览
   const [preview, setPreview] = useState<{ id: string; name: string } | null>(null);
   const [previewImageFallback, setPreviewImageFallback] = useState(false);
+  const [showDualPreview, setShowDualPreview] = useState(false);
   const [pendingBody, setPendingBody] = useState<{
     source_creative_id: string;
     target_creative_id: string;
@@ -185,6 +263,35 @@ function MergeActions({ item }: { item: ReviewItem }) {
       invalidate();
     },
   });
+  // 键盘流（P0b 加固）：←/→/x 只 arm（预备，3s 超时取消），Enter 才执行
+  // armed 动作——arm 与 confirm 不同键，按住方向键的 key repeat 或快速连按
+  // 无法误触发合并。done/busy 时 no-op。
+  useImperativeHandle(ref, () => ({
+    armIntoLeft: () => {
+      if (done || !item.creative_id || !item.related_creative_id) return;
+      armOnly("keep-left" + item.title, () =>
+        mergeMutation.mutate({
+          source_creative_id: item.related_creative_id!,
+          target_creative_id: item.creative_id!,
+        }),
+      );
+    },
+    armIntoRight: () => {
+      if (done || !item.creative_id || !item.related_creative_id) return;
+      armOnly("keep-right" + item.title, () =>
+        mergeMutation.mutate({
+          source_creative_id: item.creative_id!,
+          target_creative_id: item.related_creative_id!,
+        }),
+      );
+    },
+    armNotSame: () => {
+      if (done || !item.creative_id || !item.related_creative_id) return;
+      armOnly("not-same" + item.title, () => similarMutation.mutate());
+    },
+    confirmArmed: confirm,
+    cancelArmed: cancel,
+  }));
   if (!item.creative_id || !item.related_creative_id) return null;
   if (done) {
     return (
@@ -197,6 +304,14 @@ function MergeActions({ item }: { item: ReviewItem }) {
   const left = item.creative_name ?? t("inbox.merge.left");
   const right = item.related_creative_name ?? t("inbox.merge.right");
   const busy = mergeMutation.isPending || similarMutation.isPending;
+  // 文本分徽章（reason_params.score，保留两位）；LLM/扫描器通道无分不显示
+  const scoreRaw = item.reason_params?.score;
+  const scoreNumber =
+    typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
+  const scoreText =
+    scoreRaw !== null && scoreRaw !== undefined && Number.isFinite(scoreNumber)
+      ? scoreNumber.toFixed(2)
+      : null;
 
   if (blockMessage && pendingBody) {
     return (
@@ -231,7 +346,8 @@ function MergeActions({ item }: { item: ReviewItem }) {
         {t("inbox.merge.hint")}
       </span>
       {item.preview_asset_id || item.related_preview_asset_id ? (
-        // 裁决前先看到素材内容：左右缩略图与"并入左/右"方位一致，点击播放
+        // 裁决前先看到素材内容：左右缩略图与"并入左/右"方位一致；
+        // 两侧都有预览时点击任一缩略图打开双视频并排预览，否则回退单侧弹层
         <span className="mb-1 flex gap-1">
           {[
             { id: item.preview_asset_id, name: left },
@@ -240,10 +356,18 @@ function MergeActions({ item }: { item: ReviewItem }) {
             side.id ? (
               <button
                 key={side.id}
-                title={t("inbox.merge.previewTitle").replace("{name}", side.name)}
+                title={
+                  item.preview_asset_id && item.related_preview_asset_id
+                    ? t("review.merge.previewBoth")
+                    : t("inbox.merge.previewTitle").replace("{name}", side.name)
+                }
                 onClick={() => {
-                  setPreviewImageFallback(false);
-                  setPreview({ id: side.id!, name: side.name });
+                  if (item.preview_asset_id && item.related_preview_asset_id) {
+                    setShowDualPreview(true);
+                  } else {
+                    setPreviewImageFallback(false);
+                    setPreview({ id: side.id!, name: side.name });
+                  }
                 }}
                 className="h-16 w-28 shrink-0 overflow-hidden rounded-md border border-neutral-200 bg-neutral-100 transition hover:border-neutral-400"
               >
@@ -258,7 +382,7 @@ function MergeActions({ item }: { item: ReviewItem }) {
           )}
         </span>
       ) : null}
-      <span className="flex items-center gap-1">
+      <span className="flex flex-wrap items-center gap-1">
       {item.suggestion ? (
         <span
           className={cn(
@@ -269,7 +393,6 @@ function MergeActions({ item }: { item: ReviewItem }) {
                 ? "bg-sky-50 text-sky-600"
                 : "bg-neutral-100 text-neutral-500",
           )}
-          title={item.suggestion_reason ?? undefined}
         >
           {item.suggestion === "merge"
             ? t("inbox.merge.suggestMerge")
@@ -277,6 +400,11 @@ function MergeActions({ item }: { item: ReviewItem }) {
               ? t("inbox.merge.suggestObserve")
               : t("inbox.merge.suggestSplit")}
           {item.suggestion_votes ? ` ${item.suggestion_votes}/3` : ""}
+        </span>
+      ) : null}
+      {scoreText ? (
+        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
+          {t("review.merge.score").replace("{score}", scoreText)}
         </span>
       ) : null}
       {([
@@ -295,7 +423,7 @@ function MergeActions({ item }: { item: ReviewItem }) {
           className={cn(
             "rounded-md px-1.5 py-0.5 text-[11px] font-medium transition",
             armed === key + item.title
-              ? "bg-emerald-500 text-white"
+              ? "bg-emerald-500 text-white ring-2 ring-emerald-300"
               : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
           )}
         >
@@ -306,15 +434,37 @@ function MergeActions({ item }: { item: ReviewItem }) {
         title={t("inbox.merge.notTheSameTitle")}
         disabled={busy}
         onClick={() => similarMutation.mutate()}
-        className="rounded-md bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-500 transition hover:bg-neutral-200"
+        className={cn(
+          "rounded-md px-1.5 py-0.5 text-[11px] font-medium transition",
+          // 键盘 x 预备态：描边 + 文字变化提示"已预备，按 Enter 执行"；
+          // 鼠标点击仍为单击直接登记（行为不变）
+          armed === "not-same" + item.title
+            ? "bg-neutral-700 text-white ring-2 ring-neutral-400"
+            : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200",
+        )}
       >
-        {t("inbox.merge.notTheSame")}
+        {armed === "not-same" + item.title
+          ? t("inbox.merge.confirmNotSame")
+          : t("inbox.merge.notTheSame")}
       </button>
       </span>
+      {item.suggestion_reason ? (
+        // 证据内联（P0b）：LLM 理由直接显示，不再藏 tooltip
+        <span className="mt-0.5 block text-[10px] leading-snug text-neutral-400">
+          {item.suggestion_reason}
+        </span>
+      ) : null}
       {errorMessage ? (
         <span className="mt-1 block text-[11px] text-red-500">
           {t("inbox.merge.failed")}：{errorMessage}
         </span>
+      ) : null}
+      {showDualPreview && item.preview_asset_id && item.related_preview_asset_id ? (
+        <MergePairPreview
+          left={{ id: item.preview_asset_id, name: left }}
+          right={{ id: item.related_preview_asset_id, name: right }}
+          onClose={() => setShowDualPreview(false)}
+        />
       ) : null}
       {preview
         ? // 预览弹层：视频默认 <video> 播放，图片素材加载失败时回退 <img>。
@@ -362,7 +512,7 @@ function MergeActions({ item }: { item: ReviewItem }) {
         : null}
     </span>
   );
-}
+});
 
 function VerdictActions({ item }: { item: ReviewItem }) {
   const t = useT();
@@ -980,10 +1130,26 @@ export function ReviewInboxPanel({
 }) {
   const t = useT();
   const { data } = useReviewQueue();
+  const { data: dnas } = useDnas();
   const [collapsed, setCollapsed] = useState(true);
   const [showNewFamily, setShowNewFamily] = useState(false);
   const queryClient = useQueryClient();
   const [bootstrapHint, setBootstrapHint] = useState<string | null>(null);
+  // --- 批量操作状态（契约 §2.5） ---------------------------------------------
+  // selectedKeys：四元组序列化 key 集合；removedKeys：批量 success/skipped 后
+  // 增量移除（队列 refetch 真正消失前先从渲染里摘掉的 key）；failedByKey：
+  // 批量 failed 项的标红原因。三者都在队列 refetch 后与存活条目对账。
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [removedKeys, setRemovedKeys] = useState<Set<string>>(new Set());
+  const [failedByKey, setFailedByKey] = useState<Map<string, BatchFailure>>(new Map());
+  const [familyPreview, setFamilyPreview] = useState<ReviewItem[] | null>(null);
+  const [assignDnaId, setAssignDnaId] = useState("");
+  const [batchHint, setBatchHint] = useState<string | null>(null);
+  // P0b：批量否决确认 modal 的待提交对、合并候选分页页码、键盘焦点对的选中 key
+  const [rejectPreview, setRejectPreview] = useState<ReviewItem[] | null>(null);
+  const [mergePage, setMergePage] = useState(0);
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const mergeHandles = useRef(new Map<string, MergeActionsHandle>());
   const bootstrapMutation = useMutation({
     mutationFn: suggestFamilies,
     onSuccess: (count) => {
@@ -1018,11 +1184,226 @@ export function ReviewInboxPanel({
     return map;
   }, [data]);
 
+  /** 三类可批量条目的并集（对账与 id→key 映射的数据源） */
+  const batchItems = useMemo(
+    () => [
+      ...(groups.get("family_bootstrap") ?? []),
+      ...(groups.get("dna_unassigned") ?? []),
+      ...(groups.get("merge_candidate") ?? []),
+    ],
+    [groups],
+  );
+
+  // 契约 §2.5 集合对账：队列 refetch（15s 轮询 / 操作后 invalidate）后，
+  // 已消失的 key 自动丢弃——防"选中 A 提交 B"，也清掉已落地的增量移除/标红。
+  useEffect(() => {
+    const alive = new Set(batchItems.map((item) => selectionKey(item.kind, item)));
+    setSelectedKeys((prev) => {
+      const next = new Set([...prev].filter((key) => alive.has(key)));
+      return next.size === prev.size ? prev : next;
+    });
+    setRemovedKeys((prev) => {
+      const next = new Set([...prev].filter((key) => alive.has(key)));
+      return next.size === prev.size ? prev : next;
+    });
+    setFailedByKey((prev) => {
+      const next = new Map([...prev].filter(([key]) => alive.has(key)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [batchItems]);
+
+  const invalidateBatch = () => {
+    void queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+    void queryClient.invalidateQueries({ queryKey: ["dnas"] });
+    void queryClient.invalidateQueries({ queryKey: ["graph"] });
+  };
+
+  /** per-item 增量更新（契约 §2.5）：success/skipped 移除、failed 保留标红 */
+  const applyBatchResponse = (response: BatchResponse) => {
+    // 批量否决回合成 id "<cid>:<rid>"，与单 id 映射合并（两者键空间不相交）。
+    // 单 id 映射排除 merge 条目：同一 creative 可能同时是待归族和多对候选的
+    // 端点，merge 对必须走合成 id，否则批量归族的结果会误摘候选卡片。
+    const idToKey = new Map([
+      ...keyByItemId(batchItems.filter((item) => item.kind !== "merge_candidate")),
+      ...keyByPairId(batchItems),
+    ]);
+    const { removed, failed } = reduceBatchResults(response.results);
+    const removedKeySet = new Set(
+      removed
+        .map((id) => idToKey.get(id))
+        .filter((key): key is string => Boolean(key)),
+    );
+    const failedEntries = new Map(
+      Object.entries(failed)
+        .map(([id, failure]) => [idToKey.get(id), failure] as const)
+        .filter((entry): entry is readonly [string, BatchFailure] => Boolean(entry[0])),
+    );
+    setRemovedKeys((prev) => new Set([...prev, ...removedKeySet]));
+    setSelectedKeys(
+      (prev) =>
+        new Set(
+          [...prev].filter(
+            (key) => !removedKeySet.has(key) && !failedEntries.has(key),
+          ),
+        ),
+    );
+    setFailedByKey((prev) => {
+      const next = new Map(prev);
+      for (const key of removedKeySet) next.delete(key);
+      for (const [key, failure] of failedEntries) next.set(key, failure);
+      return next;
+    });
+    const { summary } = response;
+    setBatchHint(
+      t("review.batch.resultSummary")
+        .replace("{ok}", String(summary.success))
+        .replace("{skipped}", String(summary.skipped))
+        .replace("{failed}", String(summary.failed)),
+    );
+    invalidateBatch();
+  };
+
+  const familyBatchMutation = useMutation({
+    mutationFn: (suggestionIds: string[]) =>
+      confirmFamiliesBatch(suggestionIds, crypto.randomUUID()),
+    onSuccess: (response) => {
+      setFamilyPreview(null);
+      applyBatchResponse(response);
+    },
+    onError: (error) => setBatchHint(apiErrorText(error, t) || t("common.failedRetry")),
+  });
+
+  const assignBatchMutation = useMutation({
+    mutationFn: ({ creativeIds, dnaId }: { creativeIds: string[]; dnaId: string }) =>
+      batchAssignDna(creativeIds, dnaId, crypto.randomUUID()),
+    onSuccess: applyBatchResponse,
+    onError: (error) => setBatchHint(apiErrorText(error, t) || t("common.failedRetry")),
+  });
+
+  // 批量否决（P0b）：登记观察对，非永久裁决——confirm modal 明示语义后调 bulk 端点
+  const rejectBatchMutation = useMutation({
+    mutationFn: (pairs: Array<{ creative_id: string; related_creative_id: string }>) =>
+      linkSimilarBulk(pairs, crypto.randomUUID()),
+    onSuccess: (response) => {
+      setRejectPreview(null);
+      applyBatchResponse(response);
+    },
+    onError: (error) => setBatchHint(apiErrorText(error, t) || t("common.failedRetry")),
+  });
+
+  // --- 合并候选：归簇 + 分页 + 键盘焦点（P0b） ------------------------------
+  const visibleMergeItems = useMemo(
+    () =>
+      (groups.get("merge_candidate") ?? []).filter(
+        (item) => !removedKeys.has(selectionKey("merge_candidate", item)),
+      ),
+    [groups, removedKeys],
+  );
+  const mergeClusters = useMemo(
+    () => clusterMergePairs(visibleMergeItems),
+    [visibleMergeItems],
+  );
+  const mergePages = useMemo(
+    () => paginateClusters(mergeClusters, MERGE_PAGE_SIZE),
+    [mergeClusters],
+  );
+  const mergePageIndex = Math.min(mergePage, Math.max(mergePages.length - 1, 0));
+  /** 当前页可见候选对的选中 key（按渲染顺序），键盘 ↑/↓ 在这条序列上移动 */
+  const mergeFocusKeys = useMemo(
+    () =>
+      (mergePages[mergePageIndex] ?? []).flatMap((cluster) =>
+        cluster.items.map((item) => selectionKey("merge_candidate", item)),
+      ),
+    [mergePages, mergePageIndex],
+  );
+
+  // 焦点移动后把焦点卡片滚进可视区
+  useEffect(() => {
+    if (!focusKey) return;
+    document
+      .querySelector(`[data-merge-key="${CSS.escape(focusKey)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [focusKey]);
+
+  /** 键盘流（P0b 加固）：↑/↓ 移动焦点，←/→/x 只 arm（预备）并入左/右/不是同一条，
+   *  Enter 才执行 armed 动作，Esc 取消 armed。arm 与 confirm 不同键，
+   *  且按住键自动重复（event.repeat）的 keydown 整体忽略——key repeat 或
+   *  快速连按无法瞬间走完 arm+confirm。输入框/下拉聚焦时不劫持按键。 */
+  const handleMergeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.repeat) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("input, select, textarea, [contenteditable='true']")) return;
+    const action = mergeKeyAction(event.key);
+    if (!action) return;
+    const keys = mergeFocusKeys;
+    if (keys.length === 0) return;
+    const index = focusKey ? keys.indexOf(focusKey) : -1;
+    if (action === "focus-down" || action === "focus-up") {
+      event.preventDefault();
+      const next =
+        action === "focus-down"
+          ? index === -1
+            ? 0
+            : moveFocusIndex(index, 1, keys.length)
+          : index === -1
+            ? keys.length - 1
+            : moveFocusIndex(index, -1, keys.length);
+      setFocusKey(keys[next]);
+      return;
+    }
+    if (!focusKey) return;
+    const handle = mergeHandles.current.get(focusKey);
+    if (!handle) return;
+    event.preventDefault();
+    if (action === "arm-into-left") handle.armIntoLeft();
+    else if (action === "arm-into-right") handle.armIntoRight();
+    else if (action === "arm-not-same") handle.armNotSame();
+    else if (action === "confirm-armed") handle.confirmArmed();
+    else handle.cancelArmed();
+  };
+
+  const toggleSelected = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+    // 重新勾选视为准备重试，清掉上一轮失败标红
+    setFailedByKey((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const setSectionSelection = (items: ReviewItem[], checked: boolean) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      for (const item of items) {
+        const key = selectionKey(item.kind, item);
+        if (checked) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+      }
+      return next;
+    });
+  };
+
   if (!data) return null;
   const total = KIND_ORDER.reduce((sum, kind) => sum + (groups.get(kind)?.length ?? 0), 0);
   const statsLine = judgeStatsLine(data, t);
   const unassignedCount = groups.get("dna_unassigned")?.length ?? 0;
   const familyHint = data.family_bootstrap_hint;
+  // 后端 P0b 新增字段；未就绪（undefined）时降级为现状显示（不显示全量总数）
+  const mergeTotal = (data as { merge_candidates_total?: number | null })
+    .merge_candidates_total;
 
   if (collapsed) {
     return (
@@ -1113,6 +1494,11 @@ export function ReviewInboxPanel({
           {bootstrapHint}
         </p>
       ) : null}
+      {batchHint ? (
+        <p className="px-5 pb-2 text-[11px] leading-snug text-neutral-400">
+          {batchHint}
+        </p>
+      ) : null}
       {statsLine ? (
         <p className="px-5 pb-2 text-[11px] leading-snug text-neutral-400">
           {statsLine}
@@ -1121,7 +1507,11 @@ export function ReviewInboxPanel({
       <InterventionDensityWidget density={data.intervention_density} />
       <HubSkewWidget skew={data.hub_skew} />
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-3 pb-3">
+      <div
+        className="flex-1 space-y-4 overflow-y-auto px-3 pb-3 outline-none"
+        tabIndex={0}
+        onKeyDown={handleMergeKeyDown}
+      >
         {total === 0 ? (
           <p className="px-2 py-8 text-center text-sm text-neutral-400">
             {t("inbox.empty")}
@@ -1130,106 +1520,502 @@ export function ReviewInboxPanel({
           KIND_ORDER.map((kind) => {
             const items = groups.get(kind) ?? [];
             if (items.length === 0) return null;
+            const batchable = BATCHABLE_KINDS.has(kind);
+            const isMerge = kind === "merge_candidate";
+            // 批量 success/skipped 的卡片先从渲染里摘掉，等队列 refetch 落锤
+            const visible = batchable
+              ? items.filter((item) => !removedKeys.has(selectionKey(kind, item)))
+              : items;
+            if (visible.length === 0) return null;
+            const selectedInSection = batchable
+              ? visible.filter((item) => selectedKeys.has(selectionKey(kind, item)))
+              : [];
+            const renderItemCard = (item: ReviewItem, index: number) => {
+              const itemKey = selectionKey(kind, item);
+              const failure = failedByKey.get(itemKey);
+              const focused = isMerge && itemKey === focusKey;
+              return (
+              // 稳定 key：用业务 id 而非 index——否则列表移位后
+              // DnaAssignActions 等子组件的 useState 会继承上一条目的
+              // 选中值（建议徽章与下拉框错位的根因）。
+              // 同一 creative 可同时是多对合并候选的左侧（A↔B、A↔C），
+              // 必须拼上 related_creative_id，否则 key 重复、React 复用
+              // 错组件实例（预览/裁决状态互相串扰）。
+              <li
+                key={`${kind}-${
+                  item.creative_id ??
+                  item.derivation_id ??
+                  item.asset_id ??
+                  item.family?.suggestion_id ??
+                  index
+                }-${item.related_creative_id ?? ""}`}
+                data-merge-key={isMerge ? itemKey : undefined}
+              >
+                {item.kind === "low_confidence" && item.asset_id ? (
+                  <Link
+                    to={`/assets/${item.asset_id}`}
+                    className="block rounded-xl px-3 py-2 transition hover:bg-black/[0.04]"
+                  >
+                    <span className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900" title={item.title}>
+                      {inboxTitleLine(item, t)}
+                    </span>
+                    <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-neutral-500">
+                      {inboxReasonLine(item, t)}
+                    </span>
+                  </Link>
+                ) : (
+                  <div className="flex items-start gap-1.5">
+                    {batchable ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedKeys.has(itemKey)}
+                        onChange={() => toggleSelected(itemKey)}
+                        aria-label={t("review.batch.selectItem")}
+                        className="mt-2.5 h-3.5 w-3.5 shrink-0 accent-rose-500"
+                      />
+                    ) : null}
+                  <div
+                    className={cn(
+                      "min-w-0 flex-1 rounded-xl px-3 py-2 transition hover:bg-black/[0.04]",
+                      failure ? "bg-red-50 ring-1 ring-red-200 hover:bg-red-50" : null,
+                      // 键盘焦点对的高亮（↑/↓ 移动）
+                      focused ? "bg-amber-50 ring-2 ring-amber-400 hover:bg-amber-50" : null,
+                    )}
+                  >
+                    <button
+                      onClick={() =>
+                        item.creative_id && onSelectCreative(`creative:${item.creative_id}`)
+                      }
+                      className="w-full text-left"
+                    >
+                      {(item.kind === "pending_verdict" ||
+                        item.kind === "derivation_review") &&
+                      item.source_label &&
+                      item.target_label ? (
+                        <>
+                          <span className="block truncate text-[11px] text-neutral-400">
+                            {item.creative_name}
+                          </span>
+                          <span
+                            className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900"
+                            title={item.title}
+                          >
+                            {item.source_label}
+                            {item.factor ? (
+                              <span className="mx-1 rounded bg-violet-50 px-1 py-px text-[10px] font-medium text-violet-600">
+                                {factorLabel(item.factor)}
+                              </span>
+                            ) : null}
+                            {item.target_label}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900" title={item.title}>
+                          {inboxTitleLine(item, t)}
+                        </span>
+                      )}
+                      <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-neutral-500">
+                        {inboxReasonLine(item, t)}
+                      </span>
+                    </button>
+                    {item.kind === "family_bootstrap" ? (
+                      <FamilyBootstrapActions item={item} />
+                    ) : item.kind === "rule_keyword" ? (
+                      <RuleKeywordActions item={item} />
+                    ) : item.kind === "archive_suggestion" ? (
+                      <ArchiveActions item={item} />
+                    ) : item.kind === "merge_candidate" ? (
+                      <MergeActions
+                        ref={(handle: MergeActionsHandle | null) => {
+                          if (handle) mergeHandles.current.set(itemKey, handle);
+                          else mergeHandles.current.delete(itemKey);
+                        }}
+                        item={item}
+                      />
+                    ) : item.kind === "pending_verdict" ? (
+                      <VerdictActions item={item} />
+                    ) : item.kind === "derivation_review" ? (
+                      <DerivationReviewActions item={item} />
+                    ) : item.kind === "dna_unassigned" ? (
+                      <DnaAssignActions item={item} />
+                    ) : item.kind === "observation_pair" ? (
+                      <ClosePairActions item={item} />
+                    ) : null}
+                    {failure ? (
+                      <span className="mt-1 block text-[11px] text-red-500">
+                        {t("review.batch.failedItem")}：
+                        {failure.message ??
+                          t(`review.batch.reason.${failure.reason ?? "error"}`)}
+                      </span>
+                    ) : null}
+                  </div>
+                  </div>
+                )}
+              </li>
+              );
+            };
             return (
               <section key={kind}>
                 <p className="mb-1.5 flex items-center gap-1.5 px-2 text-xs font-semibold text-neutral-600">
                   <span className={cn("h-2 w-2 rounded-full", KIND_DOT[kind])} />
-                  {t(`inbox.kind.${kind}`)} · {items.length}
+                  {t(`inbox.kind.${kind}`)} · {visible.length}
+                  {isMerge && typeof mergeTotal === "number" ? (
+                    // 后端 merge_candidates_total 就绪时显示全量总数；缺失则降级为现状
+                    <span className="font-normal text-neutral-400">
+                      {t("review.merge.totalCount").replace("{total}", String(mergeTotal))}
+                    </span>
+                  ) : null}
+                  {batchable ? (
+                    <span className="ml-auto flex items-center gap-1.5 text-[11px] font-normal">
+                      {selectedInSection.length > 0 ? (
+                        <span className="text-neutral-400">
+                          {t("review.batch.selected").replace(
+                            "{n}",
+                            String(selectedInSection.length),
+                          )}
+                        </span>
+                      ) : null}
+                      <button
+                        onClick={() => setSectionSelection(visible, true)}
+                        className="rounded px-1 py-0.5 text-neutral-500 transition hover:bg-black/5 hover:text-neutral-700"
+                      >
+                        {t("review.batch.selectAll")}
+                      </button>
+                      <button
+                        onClick={() => setSectionSelection(visible, false)}
+                        disabled={selectedInSection.length === 0}
+                        className="rounded px-1 py-0.5 text-neutral-500 transition hover:bg-black/5 hover:text-neutral-700 disabled:opacity-40"
+                      >
+                        {t("review.batch.clear")}
+                      </button>
+                    </span>
+                  ) : null}
                 </p>
-                <ul className="space-y-1">
-                  {items.map((item, index) => (
-                    // 稳定 key：用业务 id 而非 index——否则列表移位后
-                    // DnaAssignActions 等子组件的 useState 会继承上一条目的
-                    // 选中值（建议徽章与下拉框错位的根因）。
-                    // 同一 creative 可同时是多对合并候选的左侧（A↔B、A↔C），
-                    // 必须拼上 related_creative_id，否则 key 重复、React 复用
-                    // 错组件实例（预览/裁决状态互相串扰）。
-                    <li
-                      key={`${kind}-${
-                        item.creative_id ??
-                        item.derivation_id ??
-                        item.asset_id ??
-                        item.family?.suggestion_id ??
-                        index
-                      }-${item.related_creative_id ?? ""}`}
+                {kind === "family_bootstrap" ? (
+                  <div className="mx-2 mb-1.5 flex items-center gap-1">
+                    <button
+                      disabled={
+                        selectedInSection.length === 0 || familyBatchMutation.isPending
+                      }
+                      onClick={() => setFamilyPreview([...selectedInSection])}
+                      className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-600 transition hover:bg-rose-100 disabled:opacity-40"
                     >
-                      {item.kind === "low_confidence" && item.asset_id ? (
-                        <Link
-                          to={`/assets/${item.asset_id}`}
-                          className="block rounded-xl px-3 py-2 transition hover:bg-black/[0.04]"
-                        >
-                          <span className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900" title={item.title}>
-                            {inboxTitleLine(item, t)}
-                          </span>
-                          <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-neutral-500">
-                            {inboxReasonLine(item, t)}
-                          </span>
-                        </Link>
-                      ) : (
-                        <div className="rounded-xl px-3 py-2 transition hover:bg-black/[0.04]">
-                          <button
-                            onClick={() =>
-                              item.creative_id && onSelectCreative(`creative:${item.creative_id}`)
-                            }
-                            className="w-full text-left"
-                          >
-                            {(item.kind === "pending_verdict" ||
-                              item.kind === "derivation_review") &&
-                            item.source_label &&
-                            item.target_label ? (
-                              <>
-                                <span className="block truncate text-[11px] text-neutral-400">
-                                  {item.creative_name}
-                                </span>
-                                <span
-                                  className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900"
-                                  title={item.title}
-                                >
-                                  {item.source_label}
-                                  {item.factor ? (
-                                    <span className="mx-1 rounded bg-violet-50 px-1 py-px text-[10px] font-medium text-violet-600">
-                                      {factorLabel(item.factor)}
-                                    </span>
-                                  ) : null}
-                                  {item.target_label}
-                                </span>
-                              </>
-                            ) : (
-                              <span className="line-clamp-2 block break-all text-sm font-medium leading-snug text-neutral-900" title={item.title}>
-                                {inboxTitleLine(item, t)}
-                              </span>
-                            )}
-                            <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-neutral-500">
-                              {inboxReasonLine(item, t)}
+                      {t("review.batch.confirmSelected")}
+                    </button>
+                    <button
+                      disabled={familyBatchMutation.isPending}
+                      onClick={() => setFamilyPreview([...visible])}
+                      className="rounded-md bg-rose-500 px-1.5 py-0.5 text-[11px] font-medium text-white transition hover:bg-rose-600 disabled:opacity-40"
+                    >
+                      {t("review.batch.confirmAll")}
+                    </button>
+                  </div>
+                ) : null}
+                {kind === "dna_unassigned" && selectedInSection.length > 0 ? (
+                  <div className="mx-2 mb-1.5 flex items-center gap-1 rounded-lg bg-rose-50/70 px-2 py-1.5">
+                    <select
+                      value={assignDnaId}
+                      onChange={(event) => setAssignDnaId(event.target.value)}
+                      className="h-6 min-w-0 flex-1 rounded-md border border-black/10 bg-white px-1 text-[11px] text-neutral-700"
+                    >
+                      <option value="">{t("inbox.dna.selectFamily")}</option>
+                      {(dnas ?? []).map((dna) => (
+                        <option key={dna.id} value={dna.id}>
+                          {dna.code} {dna.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      disabled={!assignDnaId || assignBatchMutation.isPending}
+                      onClick={() =>
+                        assignBatchMutation.mutate({
+                          creativeIds: selectedInSection
+                            .map((item) => item.creative_id)
+                            .filter((id): id is string => Boolean(id)),
+                          dnaId: assignDnaId,
+                        })
+                      }
+                      className="shrink-0 rounded-md bg-rose-500 px-1.5 py-0.5 text-[11px] font-medium text-white transition hover:bg-rose-600 disabled:opacity-40"
+                    >
+                      {assignBatchMutation.isPending
+                        ? t("review.batch.assigning")
+                        : t("review.batch.assignTo")}
+                    </button>
+                  </div>
+                ) : null}
+                {isMerge ? (
+                  <>
+                    <div className="mx-2 mb-1.5 flex items-center gap-1">
+                      <button
+                        disabled={
+                          selectedInSection.length === 0 || rejectBatchMutation.isPending
+                        }
+                        onClick={() => setRejectPreview([...selectedInSection])}
+                        className="rounded-md bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-40"
+                      >
+                        {rejectBatchMutation.isPending
+                          ? t("review.merge.batchRejecting")
+                          : t("review.merge.batchReject")}
+                      </button>
+                    </div>
+                    <p className="mx-2 mb-1.5 text-[10px] leading-snug text-neutral-400">
+                      {t("review.merge.keyboardHint")}
+                    </p>
+                    {(mergePages[mergePageIndex] ?? []).map((cluster) => (
+                      <div key={cluster.hubId} className="mb-1.5">
+                        {cluster.items.length > 1 ? (
+                          // 连通分量簇：枢纽 creative 的多对一簇裁一次。
+                          // 簇级快捷操作只有"全部不是同一素材"（登记观察对、可逆）；
+                          // 产品决策：不做簇级并入（太危险）。
+                          <p className="mb-1 flex items-center justify-between gap-2 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">
+                            <span>
+                              {t("review.merge.clusterTitle")
+                                .replace("{name}", cluster.hubName)
+                                .replace("{n}", String(cluster.items.length))}
                             </span>
-                          </button>
-                          {item.kind === "family_bootstrap" ? (
-                            <FamilyBootstrapActions item={item} />
-                          ) : item.kind === "rule_keyword" ? (
-                            <RuleKeywordActions item={item} />
-                          ) : item.kind === "archive_suggestion" ? (
-                            <ArchiveActions item={item} />
-                          ) : item.kind === "merge_candidate" ? (
-                            <MergeActions item={item} />
-                          ) : item.kind === "pending_verdict" ? (
-                            <VerdictActions item={item} />
-                          ) : item.kind === "derivation_review" ? (
-                            <DerivationReviewActions item={item} />
-                          ) : item.kind === "dna_unassigned" ? (
-                            <DnaAssignActions item={item} />
-                          ) : item.kind === "observation_pair" ? (
-                            <ClosePairActions item={item} />
-                          ) : null}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                            <button
+                              disabled={rejectBatchMutation.isPending}
+                              onClick={() => setRejectPreview([...cluster.items])}
+                              className="shrink-0 rounded-md bg-white/70 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-300 transition hover:bg-white disabled:opacity-40"
+                            >
+                              {rejectBatchMutation.isPending
+                                ? t("review.merge.batchRejecting")
+                                : t("review.merge.clusterRejectAll")}
+                            </button>
+                          </p>
+                        ) : null}
+                        <ul className="space-y-1">
+                          {cluster.items.map((item, index) => renderItemCard(item, index))}
+                        </ul>
+                      </div>
+                    ))}
+                    {mergePages.length > 1 ? (
+                      <div className="mx-2 mt-1.5 flex items-center justify-between text-[11px] text-neutral-500">
+                        <button
+                          disabled={mergePageIndex === 0}
+                          onClick={() => setMergePage(mergePageIndex - 1)}
+                          className="flex items-center gap-0.5 rounded px-1 py-0.5 transition hover:bg-black/5 disabled:opacity-40"
+                        >
+                          <ChevronLeft className="h-3 w-3" />
+                          {t("review.merge.pagePrev")}
+                        </button>
+                        <span>
+                          {t("review.merge.pageInfo")
+                            .replace("{page}", String(mergePageIndex + 1))
+                            .replace("{pages}", String(mergePages.length))}
+                        </span>
+                        <button
+                          disabled={mergePageIndex >= mergePages.length - 1}
+                          onClick={() => setMergePage(mergePageIndex + 1)}
+                          className="flex items-center gap-0.5 rounded px-1 py-0.5 transition hover:bg-black/5 disabled:opacity-40"
+                        >
+                          {t("review.merge.pageNext")}
+                          <ChevronRight className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <ul className="space-y-1">
+                    {visible.map((item, index) => renderItemCard(item, index))}
+                  </ul>
+                )}
               </section>
             );
           })
         )}
       </div>
+      {familyPreview
+        ? // 预览 modal 必须 portal 到 body：面板带 backdrop-blur（会形成 fixed
+          // 包含块）且 overflow-hidden，直接渲染 fixed 弹层会被裁剪在 400px
+          // 面板内（与 MergeActions 预览同坑）。
+          createPortal(
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onClick={() =>
+                familyBatchMutation.isPending ? null : setFamilyPreview(null)
+              }
+            >
+              <div
+                className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-white shadow-xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-4 py-3">
+                  <h3 className="text-sm font-semibold text-neutral-900">
+                    {t("review.batch.previewTitle")}
+                  </h3>
+                  <button
+                    onClick={() => setFamilyPreview(null)}
+                    disabled={familyBatchMutation.isPending}
+                    className="rounded p-0.5 text-neutral-400 transition hover:bg-black/5 hover:text-neutral-600 disabled:opacity-40"
+                    aria-label={t("common.close")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <ul className="flex-1 space-y-1 overflow-y-auto px-4 pb-2">
+                  {familyPreview.map((item) =>
+                    item.family ? (
+                      <li
+                        key={item.family.suggestion_id}
+                        className="flex items-center justify-between gap-2 rounded-lg bg-black/[0.03] px-2.5 py-1.5"
+                      >
+                        <span className="min-w-0 truncate text-xs font-medium text-neutral-800">
+                          {item.family.existing_dna_code
+                            ? t("inbox.family.attachTo").replace(
+                                "{label}",
+                                item.family.name,
+                              )
+                            : item.family.name}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-neutral-500">
+                          {t("inbox.family.members").replace(
+                            "{n}",
+                            String(item.family.members.length),
+                          )}
+                        </span>
+                      </li>
+                    ) : null,
+                  )}
+                </ul>
+                <div className="border-t border-black/5 px-4 py-3">
+                  <p className="text-[11px] text-neutral-500">
+                    {t("review.batch.previewSummary")
+                      .replace("{families}", String(familyPreview.length))
+                      .replace(
+                        "{members}",
+                        String(
+                          familyPreview.reduce(
+                            (sum, item) => sum + (item.family?.members.length ?? 0),
+                            0,
+                          ),
+                        ),
+                      )}
+                  </p>
+                  <p className="mt-1 text-[11px] leading-snug text-neutral-400">
+                    {t("review.batch.previewNote")}
+                  </p>
+                  <div className="mt-2.5 flex items-center justify-end gap-1.5">
+                    <button
+                      onClick={() => setFamilyPreview(null)}
+                      disabled={familyBatchMutation.isPending}
+                      className="rounded-md bg-neutral-100 px-2.5 py-1 text-[11px] font-medium text-neutral-500 transition hover:bg-neutral-200 disabled:opacity-40"
+                    >
+                      {t("review.batch.cancel")}
+                    </button>
+                    <button
+                      disabled={familyBatchMutation.isPending}
+                      onClick={() =>
+                        familyBatchMutation.mutate(
+                          familyPreview
+                            .map((item) => item.family?.suggestion_id)
+                            .filter((id): id is string => Boolean(id)),
+                        )
+                      }
+                      className="rounded-md bg-rose-500 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-rose-600 disabled:opacity-40"
+                    >
+                      {familyBatchMutation.isPending
+                        ? t("review.batch.confirming")
+                        : t("review.batch.confirm")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {rejectPreview
+        ? // 批量否决确认 modal：明示语义（登记观察对、可再合并、非永久裁决），
+          // 与 familyPreview 同款 portal（面板 backdrop-blur/overflow 会裁剪 fixed）。
+          createPortal(
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onClick={() =>
+                rejectBatchMutation.isPending ? null : setRejectPreview(null)
+              }
+            >
+              <div
+                className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-white shadow-xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-4 py-3">
+                  <h3 className="text-sm font-semibold text-neutral-900">
+                    {t("review.merge.batchRejectTitle")}
+                  </h3>
+                  <button
+                    onClick={() => setRejectPreview(null)}
+                    disabled={rejectBatchMutation.isPending}
+                    className="rounded p-0.5 text-neutral-400 transition hover:bg-black/5 hover:text-neutral-600 disabled:opacity-40"
+                    aria-label={t("common.close")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <ul className="flex-1 space-y-1 overflow-y-auto px-4 pb-2">
+                  {rejectPreview.map((item) => (
+                    <li
+                      key={selectionKey("merge_candidate", item)}
+                      className="rounded-lg bg-black/[0.03] px-2.5 py-1.5 text-xs font-medium text-neutral-800"
+                    >
+                      <span className="break-all">
+                        {item.creative_name ?? item.creative_id}
+                      </span>
+                      <span className="mx-1 text-neutral-400">⇄</span>
+                      <span className="break-all">
+                        {item.related_creative_name ?? item.related_creative_id}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="border-t border-black/5 px-4 py-3">
+                  <p className="text-[11px] text-neutral-500">
+                    {t("review.merge.batchRejectSummary").replace(
+                      "{n}",
+                      String(rejectPreview.length),
+                    )}
+                  </p>
+                  <p className="mt-1 text-[11px] leading-snug text-neutral-400">
+                    {t("review.merge.batchRejectNote")}
+                  </p>
+                  <div className="mt-2.5 flex items-center justify-end gap-1.5">
+                    <button
+                      onClick={() => setRejectPreview(null)}
+                      disabled={rejectBatchMutation.isPending}
+                      className="rounded-md bg-neutral-100 px-2.5 py-1 text-[11px] font-medium text-neutral-500 transition hover:bg-neutral-200 disabled:opacity-40"
+                    >
+                      {t("review.batch.cancel")}
+                    </button>
+                    <button
+                      disabled={rejectBatchMutation.isPending}
+                      onClick={() =>
+                        rejectBatchMutation.mutate(
+                          rejectPreview
+                            .map((item) => ({
+                              creative_id: item.creative_id,
+                              related_creative_id: item.related_creative_id,
+                            }))
+                            .filter(
+                              (pair): pair is {
+                                creative_id: string;
+                                related_creative_id: string;
+                              } => Boolean(pair.creative_id && pair.related_creative_id),
+                            ),
+                        )
+                      }
+                      className="rounded-md bg-neutral-700 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-neutral-800 disabled:opacity-40"
+                    >
+                      {rejectBatchMutation.isPending
+                        ? t("review.merge.batchRejecting")
+                        : t("review.batch.confirm")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

@@ -2,29 +2,41 @@
 
 Assignments are human decisions (registry §2) — every change is audit-logged
 and synced to Neo4j (:CreativeDNA)-[:HAS_CREATIVE] + the SQL mirror.
+
+P0a（契约 2026-10-20）：家族停用/启用 + 三个幂等批量端点。逐条语义在
+app.services.family_ops，这里只做参数解析与 commit / Neo4j /
+rebuild_mirror 收口。
 """
 
 from __future__ import annotations
 
 import json
-import re
+from typing import Annotated
 
-from fastapi import APIRouter
-from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from fastapi import APIRouter, Header
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import DbDep, SettingsDep
+from app.config import Settings
 from app.exceptions import ApiError
-from app.models import CreativeDNA, JudgeSuggestion
+from app.models import JudgeSuggestion
 from app.repositories.creatives import CreativeRepository
 from app.repositories.dna import DnaRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import rebuild_mirror
 from app.repositories.settings import SettingsRepository
+from app.schemas.batch import BatchResult
 from app.schemas.common import Envelope, ok
-from app.services import family_bootstrap, graph_sync, markets, rule_feedback
+from app.services import (
+    family_bootstrap,
+    family_ops,
+    graph_sync,
+    idempotency,
+    markets,
+    rule_feedback,
+)
+from app.services.family_ops import BatchRun
 from app.services.settings import resolve_ai_config
 
 router = APIRouter()
@@ -69,55 +81,30 @@ class FamilyDismissPayload(BaseModel):
     suggestion_id: str
 
 
+class ConfirmFamiliesPayload(BaseModel):
+    """批量确认建族（契约 §2.2）：成员取值以提案负载为准，上限 50。"""
+
+    suggestion_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class BatchAssignPayload(BaseModel):
+    """批量归入同一族（契约 §2.3），上限 200。"""
+
+    creative_ids: list[str] = Field(max_length=200)
+    dna_id: str
+
+
+class BatchUnassignPayload(BaseModel):
+    """批量取消归族（契约 §2.4），上限 200。"""
+
+    creative_ids: list[str] = Field(max_length=200)
+
+
 class RuleKeywordPayload(BaseModel):
     """规则词确认/跳过：只传建议 id——词与目标从建议负载里读（服务端），
     客户端不能写任意词进词表（写入口只有这一条路）。"""
 
     suggestion_id: str
-
-
-def _next_code(db: Session) -> str:
-    """Server-side numbering: max existing D-sequence + 1, formatted D%02d."""
-    codes = db.scalars(select(CreativeDNA.code)).all()
-    max_n = max(
-        (int(c[1:]) for c in codes if re.fullmatch(r"D\d+", c)),
-        default=0,
-    )
-    return f"D{max_n + 1:02d}"
-
-
-def _create_dna_numbered(
-    db: Session,
-    *,
-    name: str,
-    hook_prototype: str = "",
-    core_mechanic: str = "",
-    narrative_structure: str = "",
-    description: str = "",
-    keywords: list[str] | None = None,
-) -> CreativeDNA:
-    """发号 + 落库（手动建族与智能建族确认共用；不含留痕/同步）。"""
-    dna_repo = DnaRepository(db)
-    dna: CreativeDNA | None = None
-    # code 后端发号：取最大序号 +1；并发撞 unique 时重发一次
-    for _ in range(2):
-        try:
-            with db.begin_nested():
-                dna = dna_repo.create(
-                    code=_next_code(db),
-                    name=name,
-                    hook_prototype=hook_prototype,
-                    core_mechanic=core_mechanic,
-                    narrative_structure=narrative_structure,
-                    description=description,
-                    keywords=family_bootstrap.clean_keywords(keywords),
-                )
-            break
-        except IntegrityError:
-            dna = None
-    if dna is None:
-        raise ApiError(409, "家族编号冲突，请重试")
-    return dna
 
 
 @router.get("/dnas", response_model=Envelope[list[DnaOut]])
@@ -136,7 +123,7 @@ def create_dna(
     if not name:
         raise ApiError(400, "家族名称不能为空")
 
-    dna = _create_dna_numbered(
+    dna = family_ops.create_dna_numbered(
         db,
         name=name,
         hook_prototype=payload.hook_prototype.strip(),
@@ -163,6 +150,55 @@ def create_dna(
     )
 
 
+# ----------------------------------------------------------------------
+# 家族停用 / 启用（P0a 契约 §1）
+# ----------------------------------------------------------------------
+@router.post("/dnas/{dna_id}/deactivate", response_model=Envelope[DnaOut])
+def deactivate_dna(
+    dna_id: str,
+    db: DbDep,
+    settings: SettingsDep,
+) -> Envelope[DnaOut]:
+    """停用家族：status→archived，成员全部回散点（不删数据），code 永久保留。
+
+    Neo4j 移除 DNA 节点及成员边，SQL 镜像 rebuild 一次；仅 active 可停用，
+    merged / 已停用一律 409。
+    """
+    dna, member_count = family_ops.deactivate_family(db, dna_id)
+    db.commit()
+
+    graph_sync.delete_dna_node(settings, dna.id)
+    rebuild_mirror(db)
+
+    return ok(
+        DnaOut(id=dna.id, code=dna.code, name=dna.name),
+        message=f"已停用家族 {dna.code} {dna.name}（{member_count} 个成员已回散点）",
+    )
+
+
+@router.post("/dnas/{dna_id}/reactivate", response_model=Envelope[DnaOut])
+def reactivate_dna(
+    dna_id: str,
+    db: DbDep,
+    settings: SettingsDep,
+) -> Envelope[DnaOut]:
+    """启用家族：status→active，不回挂成员（散点由正常归族流程重新分配）。"""
+    dna = family_ops.reactivate_family(db, dna_id)
+    db.commit()
+
+    # 重建 Neo4j 节点（停用时已移除）；无成员边——成员走正常归族流程
+    graph_sync.sync_dna_subgraph(settings, dna=dna, creatives=[])
+    rebuild_mirror(db)
+
+    return ok(
+        DnaOut(id=dna.id, code=dna.code, name=dna.name),
+        message=f"已启用家族 {dna.code} {dna.name}",
+    )
+
+
+# ----------------------------------------------------------------------
+# 智能建族：提案 / 确认（单条 + 批量）/ 跳过
+# ----------------------------------------------------------------------
 @router.post("/dnas/suggest-families", response_model=Envelope[int])
 def suggest_families_route(db: DbDep, settings: SettingsDep) -> Envelope[int]:
     """智能建族：LLM 对全部未归族 creative 做互斥家族划分，提案进收件箱。"""
@@ -181,64 +217,137 @@ def confirm_family(
     settings: SettingsDep,
 ) -> Envelope[DnaOut]:
     """确认一个智能建族提案：建族（或并入已有家族）+ 挂接 + 留痕 + 删建议。"""
-    suggestion = db.get(JudgeSuggestion, payload.suggestion_id)
-    if suggestion is None or suggestion.kind != family_bootstrap.KIND:
-        raise ApiError(404, f"建族提案不存在：{payload.suggestion_id}")
-
-    attach_code = (payload.existing_dna_code or "").strip().upper()
-    if attach_code:
-        # 并入已有家族：不建族只挂接，name/三要素/keywords 忽略
-        dna = db.scalar(
-            select(CreativeDNA).where(CreativeDNA.code == attach_code)
-        )
-        if dna is None:
-            raise ApiError(404, f"DNA 家族不存在：{attach_code}")
-    else:
-        name = payload.name.strip()
-        if not name:
-            raise ApiError(400, "家族名称不能为空")
-        dna = _create_dna_numbered(
-            db,
-            name=name,
-            hook_prototype=payload.hook_prototype.strip(),
-            core_mechanic=payload.core_mechanic.strip(),
-            narrative_structure=payload.narrative_structure.strip(),
-            keywords=payload.keywords,
-        )
-
-    dna_repo = DnaRepository(db)
-    creative_repo = CreativeRepository(db)
-    edit_logs = EditLogRepository(db)
-    assigned = []
-    # 只挂仍是散点的成员（提案生成后可能已被其他流程归族，绝不抢）
-    for member_id in dict.fromkeys(payload.member_ids):
-        creative = creative_repo.get(member_id)
-        if creative is None or creative.dna_id is not None:
-            continue
-        dna_repo.assign_creative(creative, dna)
-        source = "智能建族并入已有家族" if attach_code else "智能建族人工确认"
-        # 人工确认的批量归族不是机器自动执行：不带 auto: 前缀——否则会被
-        # judge_calibration 计入 dna_assign 自动改判率桶（P0-2 统计污染），
-        # 在 intervention 口径里它本就是人工裁决（收件箱逐族确认）
-        edit_logs.record(
-            entity_type="creative",
-            entity_id=creative.id,
-            action="update",
-            field="dna_id",
-            new_value=f"{dna.code} {dna.name}（{source}）",
-        )
-        assigned.append(creative)
-
-    db.delete(suggestion)
+    outcome = family_ops.confirm_family_tx(
+        db,
+        suggestion_id=payload.suggestion_id,
+        name=payload.name,
+        hook_prototype=payload.hook_prototype,
+        core_mechanic=payload.core_mechanic,
+        narrative_structure=payload.narrative_structure,
+        keywords=payload.keywords,
+        member_ids=payload.member_ids,
+        existing_dna_code=payload.existing_dna_code,
+    )
     db.commit()
 
-    graph_sync.sync_dna_subgraph(settings, dna=dna, creatives=assigned)
+    dna = outcome.dna
+    graph_sync.sync_dna_subgraph(settings, dna=dna, creatives=outcome.assigned)
     rebuild_mirror(db)
 
-    action = "已并入家族" if attach_code else "已创建家族"
+    action = "已并入家族" if outcome.attach else "已创建家族"
     return ok(
         DnaOut(id=dna.id, code=dna.code, name=dna.name),
-        message=f"{action} {dna.code} {dna.name}（{len(assigned)} 个成员）",
+        message=f"{action} {dna.code} {dna.name}（{len(outcome.assigned)} 个成员）",
+    )
+
+
+# ----------------------------------------------------------------------
+# 幂等批量端点（P0a 契约 §2）：Idempotency-Key 必需，逐项 savepoint 隔离，
+# 末尾统一 rebuild_mirror 一次（全部失败/全部 skipped 不 rebuild）。
+# 同步执行不支持中途取消——前端可中断等待，后端继续跑完（契约 §2.1）。
+# ----------------------------------------------------------------------
+IdempotencyHeader = Annotated[str | None, Header(alias="Idempotency-Key")]
+
+
+def _require_idempotency_key(key: str | None) -> str:
+    return idempotency.require_key(key)
+
+
+def _replay(db: Session, *, key: str, endpoint: str) -> Envelope[BatchResult] | None:
+    """同 key 同 endpoint 的重复提交：直接返回首次存储的 response，不重复执行。"""
+    stored = idempotency.get_stored(db, key=key, endpoint=endpoint)
+    if stored is None:
+        return None
+    return ok(
+        BatchResult(**stored["data"]),
+        message=str(stored.get("message") or ""),
+    )
+
+
+def _finalize_batch(
+    db: Session,
+    settings: Settings,
+    *,
+    key: str,
+    endpoint: str,
+    run: BatchRun,
+) -> Envelope[BatchResult]:
+    """存幂等记录 + commit + 成功项 Neo4j 同步 + 末尾一次 rebuild_mirror。"""
+    result = run.result
+    summary = result.summary
+    message = (
+        f"批量完成：成功 {summary.success} / "
+        f"跳过 {summary.skipped} / 失败 {summary.failed}"
+    )
+    idempotency.store_response(
+        db,
+        key=key,
+        endpoint=endpoint,
+        response={"data": result.model_dump(), "message": message},
+    )
+    db.commit()
+
+    if summary.success > 0:
+        dna_repo = DnaRepository(db)
+        for touched_id in run.touched_dna_ids:
+            dna = dna_repo.get(touched_id)
+            if dna is not None:
+                graph_sync.sync_dna_subgraph(
+                    settings, dna=dna, creatives=dna_repo.list_creatives(dna.id)
+                )
+        rebuild_mirror(db)
+    return ok(result, message=message)
+
+
+@router.post("/dnas/confirm-families", response_model=Envelope[BatchResult])
+def confirm_families(
+    payload: ConfirmFamiliesPayload,
+    db: DbDep,
+    settings: SettingsDep,
+    idempotency_key: IdempotencyHeader = None,
+) -> Envelope[BatchResult]:
+    """批量确认建族提案；空族护栏：无有效成员 → 不建族、删建议、skipped。"""
+    key = _require_idempotency_key(idempotency_key)
+    replay = _replay(db, key=key, endpoint="confirm-families")
+    if replay is not None:
+        return replay
+    run = family_ops.run_confirm_families(db, payload.suggestion_ids)
+    return _finalize_batch(db, settings, key=key, endpoint="confirm-families", run=run)
+
+
+@router.post("/creatives/batch-assign-dna", response_model=Envelope[BatchResult])
+def batch_assign_dna(
+    payload: BatchAssignPayload,
+    db: DbDep,
+    settings: SettingsDep,
+    idempotency_key: IdempotencyHeader = None,
+) -> Envelope[BatchResult]:
+    """批量归入同一族；已在该族的 skipped(already_done)，不存在 failed(not_found)。"""
+    key = _require_idempotency_key(idempotency_key)
+    replay = _replay(db, key=key, endpoint="batch-assign-dna")
+    if replay is not None:
+        return replay
+    run = family_ops.run_batch_assign(
+        db, creative_ids=payload.creative_ids, dna_id=payload.dna_id
+    )
+    return _finalize_batch(db, settings, key=key, endpoint="batch-assign-dna", run=run)
+
+
+@router.post("/creatives/batch-unassign-dna", response_model=Envelope[BatchResult])
+def batch_unassign_dna(
+    payload: BatchUnassignPayload,
+    db: DbDep,
+    settings: SettingsDep,
+    idempotency_key: IdempotencyHeader = None,
+) -> Envelope[BatchResult]:
+    """批量取消归族；未归族的 skipped(already_done)，不存在 failed(not_found)。"""
+    key = _require_idempotency_key(idempotency_key)
+    replay = _replay(db, key=key, endpoint="batch-unassign-dna")
+    if replay is not None:
+        return replay
+    run = family_ops.run_batch_unassign(db, payload.creative_ids)
+    return _finalize_batch(
+        db, settings, key=key, endpoint="batch-unassign-dna", run=run
     )
 
 
@@ -292,7 +401,7 @@ def confirm_rule_keyword(payload: RuleKeywordPayload, db: DbDep) -> Envelope[Non
         tokens = [t.strip() for t in raw.split(",") if t.strip()]
         if word.lower() not in {t.lower() for t in tokens}:
             tokens.append(word)
-            repo.set(markets.GENERIC_TOKENS_SETTING, ",".join(tokens))
+        repo.set(markets.GENERIC_TOKENS_SETTING, ",".join(tokens))
         setting_key = markets.GENERIC_TOKENS_SETTING
     else:
         setting_key = rule_feedback.RULE_KEYWORDS_SETTING_TEMPLATE.format(target=target)
@@ -349,31 +458,18 @@ def assign_creative_dna(
     if creative is None:
         raise ApiError(404, f"Creative 不存在：{creative_id}")
 
-    dna_repo = DnaRepository(db)
-    old_label = ""
-    if creative.dna_id:
-        old_dna = dna_repo.get(creative.dna_id)
-        old_label = f"{old_dna.code} {old_dna.name}" if old_dna else str(creative.dna_id)
-
-    dna = dna_repo.get(payload.dna_id) if payload.dna_id else None
+    dna = DnaRepository(db).get(payload.dna_id) if payload.dna_id else None
     if payload.dna_id and dna is None:
         raise ApiError(404, f"DNA 家族不存在：{payload.dna_id}")
+    if dna is not None and dna.status != "active":
+        raise ApiError(409, f"家族 {dna.code} {dna.name} 已停用或合并，不能归族")
 
-    dna_repo.assign_creative(creative, dna)
-    new_label = f"{dna.code} {dna.name}" if dna else ""
-    EditLogRepository(db).record(
-        entity_type="creative",
-        entity_id=creative.id,
-        action="update",
-        field="dna_id",
-        old_value=old_label,
-        new_value=new_label,
-    )
+    family_ops.set_creative_dna(db, creative, dna)
     db.commit()
 
     if dna is not None:
         graph_sync.sync_dna_subgraph(
-            settings, dna=dna, creatives=dna_repo.list_creatives(dna.id)
+            settings, dna=dna, creatives=DnaRepository(db).list_creatives(dna.id)
         )
     rebuild_mirror(db)
 

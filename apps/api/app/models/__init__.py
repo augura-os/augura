@@ -8,6 +8,7 @@ from app.models.derivation import VariantDerivation
 from app.models.dna import CreativeDNA
 from app.models.edit_log import EditLog
 from app.models.graph import GraphEdge, GraphNode
+from app.models.idempotency import IdempotencyKey
 from app.models.job import AnalysisJob
 from app.models.judge import JudgeSuggestion
 from app.models.project import Project
@@ -28,6 +29,7 @@ __all__ = [
     "EditLog",
     "GraphEdge",
     "GraphNode",
+    "IdempotencyKey",
     "JudgeSuggestion",
     "Performance",
     "Project",

@@ -173,6 +173,8 @@ cd apps/web && npm install && npm run dev   # hot reload, proxied to :8000
 cd apps/api && pytest                        # backend tests
 ```
 
+For the offline merge-family evaluation harness and its privacy/test protocol, see [docs/merge-family-experiment.md](docs/merge-family-experiment.md).
+
 ## Data & Privacy
 
 See [PRIVACY.md](PRIVACY.md). The precise version: **raw creatives and performance details stay on your machine by default; during AI analysis, frame samples and structured data go to the model provider you configure in Settings** (any OpenAI-compatible endpoint — the destination is your choice). We want your judgment, not your assets.

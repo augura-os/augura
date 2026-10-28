@@ -198,10 +198,17 @@ def _unassigned_profiles(db: Session) -> list[dict[str, str]]:
 
 
 def _confirmed_families(db: Session) -> list[dict[str, str]]:
-    """已确认入库的家族（existing 的初始内容，LLM 可引用 code 并入）。"""
+    """已确认入库的家族（existing 的初始内容，LLM 可引用 code 并入）。
+
+    只出 active：archived 家族不可并入（契约 §1.2.3 智能建族候选口径）。
+    """
     return [
         {"code": d.code, "name": d.name, "core_mechanic": d.core_mechanic}
-        for d in db.scalars(select(CreativeDNA).order_by(CreativeDNA.code)).all()
+        for d in db.scalars(
+            select(CreativeDNA)
+            .where(CreativeDNA.status == "active")
+            .order_by(CreativeDNA.code)
+        ).all()
     ]
 
 

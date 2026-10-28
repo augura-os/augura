@@ -145,6 +145,8 @@ class ReviewQueue(BaseModel):
     low_confidence: list[ReviewItem] = Field(default_factory=list)
     dna_unassigned: list[ReviewItem] = Field(default_factory=list)
     merge_candidates: list[ReviewItem] = Field(default_factory=list)
+    # 合并候选总对数（三通道合计去重；merge_candidates 只是前 merge_limit 条）
+    merge_candidates_total: int = 0
     observation_pairs: list[ReviewItem] = Field(default_factory=list)
     pending_verdicts: list[ReviewItem] = Field(default_factory=list)
     derivation_reviews: list[ReviewItem] = Field(default_factory=list)

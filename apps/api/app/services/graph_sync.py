@@ -118,6 +118,14 @@ def sync_asset_tags(
         logger.warning("Neo4j 标签同步失败: %s", exc)
 
 
+def delete_dna_node(settings: Settings, dna_id: str) -> None:
+    """Remove a DNA family node and its edges (family deactivated)."""
+    try:
+        get_graph_repository(settings).delete_dna(dna_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Neo4j 删除 DNA 节点失败: %s", exc)
+
+
 def delete_asset_subgraph(settings: Settings, asset_id: str) -> None:
     try:
         get_graph_repository(settings).delete_asset_subtree(asset_id)
@@ -145,8 +153,16 @@ def reconcile_graph(db: Session, settings: Settings) -> None:
     """
     try:
         repo = get_graph_repository(settings)
+        # dna 只认 active：archived（已停用）/ merged 家族的节点视作幽灵清理
         valid_ids: list[tuple[NodeType, list[str]]] = [
-            ("dna", list(db.scalars(select(CreativeDNA.id)))),
+            (
+                "dna",
+                list(
+                    db.scalars(
+                        select(CreativeDNA.id).where(CreativeDNA.status == "active")
+                    )
+                ),
+            ),
             ("creative", list(db.scalars(select(Creative.id)))),
             ("variant", list(db.scalars(select(CreativeVariant.id)))),
             ("asset", list(db.scalars(select(CreativeAsset.id)))),

@@ -36,7 +36,7 @@ from app.services.dna_classifier import suggest_dna
 from app.services.judge_calibration import judge_auto_allowed
 from app.services.judge_suggestions import delete_suggestion, upsert_suggestion
 from app.services.merge_guard import find_db_ruling, find_prior_ruling
-from app.services.merge_judge import judge_pair
+from app.services.merge_judge import evidence_from_analysis, judge_pair
 from app.services.merge_measure import (
     MIN_ALIGNED_FRACTION_FOR_AUTO,
     measure_pair_evidence,
@@ -156,6 +156,7 @@ def run_merge_judgements(
         and (SettingsRepository(db).get("merge_auto_enabled") or "true") != "false"  # 默认开
     )
     candidates = review_service.merge_candidate_items(db)
+    card_cache: dict = {}  # v4：指纹卡按证据哈希缓存，本批次内共享
     for item in candidates:
         try:
             if not item.creative_id or not item.related_creative_id:
@@ -172,7 +173,9 @@ def run_merge_judgements(
             for cid in (item.creative_id, item.related_creative_id):
                 row = db.execute(
                     text(
-                        "select a.hook, a.conflict, a.gameplay from analysis_results a "
+                        "select a.summary, a.hook, a.conflict, a.gameplay, a.reward, "
+                        "a.characters, a.environment, a.emotion, a.tags, "
+                        "a.variant_factors from analysis_results a "
                         "join creative_variants v on v.asset_id = a.asset_id "
                         "where v.creative_id = :cid order by a.created_at limit 1"
                     ),
@@ -180,13 +183,14 @@ def run_merge_judgements(
                 ).first()
                 if row is None:
                     break
-                analyses[cid] = f"钩子：{row[0]}\n冲突：{row[1]}\n玩法：{row[2]}"
+                analyses[cid] = evidence_from_analysis(row._asdict())
             if len(analyses) != 2:
                 continue
             judgement = judge_pair(
                 config,
-                analysis_a=analyses[item.creative_id],
-                analysis_b=analyses[item.related_creative_id],
+                evidence_a=analyses[item.creative_id],
+                evidence_b=analyses[item.related_creative_id],
+                card_cache=card_cache,
             )
             if judgement is None:
                 continue
@@ -251,9 +255,10 @@ def run_merge_judgements(
                 db, kind="merge_pair", left_id=item.creative_id,
                 right_id=item.related_creative_id, verdict=verdict,
                 votes=judgement.votes, reason=judgement.reason,
+                reason_params=judgement.reason_params(),
             )
             logger.info(
-                "judge %-5s (%s/3) %s :: %s",
+                "judge %-5s (%s 视角) %s :: %s",
                 verdict, judgement.votes, item.title[:50], judgement.reason[:40],
             )
             if commit and not dry_run:

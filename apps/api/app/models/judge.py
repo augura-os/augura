@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, new_uuid
@@ -24,3 +25,8 @@ class JudgeSuggestion(TimestampMixin, Base):
     verdict: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     votes: Mapped[int] = mapped_column(default=0)
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 结构化判定解释（merge-judge-v2 起）：relation/core/variant 维度、
+    # 三视角票明细、model_id/prompt_version——支撑阈值回测与审计回滚
+    reason_params: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )

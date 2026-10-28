@@ -1,0 +1,10 @@
+[
+  {
+    "name": "demo-survival-alpha",
+    "expected_variants": 7
+  },
+  {
+    "name": "demo-survival-beta",
+    "expected_variants": 6
+  }
+]

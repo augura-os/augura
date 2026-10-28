@@ -374,7 +374,11 @@ def build_report(db: Session, creatives: Sequence[Creative]) -> "ReportData":
     from app.services.markets import resolve_market_prefixes
     from app.services.settings import resolve_thresholds
 
-    dnas = {d.id: d for d in db.scalars(select(CreativeDNA)).all()}
+    # 只出 active：archived 家族无成员（停用时已回散点），不参与报告归因
+    dnas = {
+        d.id: d
+        for d in db.scalars(select(CreativeDNA).where(CreativeDNA.status == "active"))
+    }
     max_date = db.scalar(
         select(Performance.date).order_by(Performance.date.desc()).limit(1)
     )

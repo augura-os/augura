@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "edit_logs",
     "graph_edges",
     "graph_nodes",
+    "idempotency_keys",
     "performances",
     "projects",
     "settings",

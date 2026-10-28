@@ -213,8 +213,9 @@ class TestScan:
     def _patch_judge(self, monkeypatch, same: bool) -> None:
         monkeypatch.setattr(
             missed_merge_scan, "judge_pair",
-            lambda config, *, analysis_a, analysis_b: MergeJudgement(
-                same_creative=same, votes=3, reason="判定理由",
+            lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
+                relation="same_variant_family" if same else "different_concept",
+                votes=3, reason="判定理由",
             ),
         )
 
@@ -308,8 +309,8 @@ class TestTier2FactorGate:
     def _patch_judge(self, monkeypatch) -> None:  # noqa: ANN001
         monkeypatch.setattr(
             missed_merge_scan, "judge_pair",
-            lambda config, *, analysis_a, analysis_b: MergeJudgement(
-                same_creative=True, votes=3, reason="判定理由",
+            lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
+                relation="same_variant_family", votes=3, reason="判定理由",
             ),
         )
 
@@ -499,8 +500,9 @@ class TestEmbeddingScanFlow:
     def _patch_judge(self, monkeypatch, same: bool, votes: int) -> None:
         monkeypatch.setattr(
             missed_merge_scan, "judge_pair",
-            lambda config, *, analysis_a, analysis_b: MergeJudgement(
-                same_creative=same, votes=votes, reason="判定理由",
+            lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
+                relation="same_variant_family" if same else "different_concept",
+                votes=votes, reason="判定理由",
             ),
         )
 
@@ -608,8 +610,8 @@ class TestScanCommitContract:
     def _patch_judge_split(self, monkeypatch) -> None:  # noqa: ANN001
         monkeypatch.setattr(
             missed_merge_scan, "judge_pair",
-            lambda config, *, analysis_a, analysis_b: MergeJudgement(
-                same_creative=False, votes=2, reason="不同创意",
+            lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
+                relation="different_concept", votes=2, reason="不同创意",
             ),
         )
 

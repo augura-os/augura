@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from app.api.deps import DbDep
@@ -24,11 +25,18 @@ router = APIRouter()
 
 
 @router.get("/review/queue", response_model=Envelope[ReviewQueue])
-def review_queue(db: DbDep) -> Envelope[ReviewQueue]:
+def review_queue(
+    db: DbDep,
+    # 合并候选分页（P0b）：返回前 merge_limit 条，总数见 merge_candidates_total
+    merge_limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> Envelope[ReviewQueue]:
     max_date = db.scalar(select(Performance.date).order_by(Performance.date.desc()).limit(1))
     # Preload performances once — per-creative matching then happens in
     # memory instead of a full table scan per creative (N+1).
     all_performances = list(db.scalars(select(Performance)).all())
+    merge_candidates, merge_candidates_total = review_service.merge_candidates_page(
+        db, limit=merge_limit
+    )
     density_weeks = [
         InterventionWeek(
             week_start=week.week_start,
@@ -44,7 +52,8 @@ def review_queue(db: DbDep) -> Envelope[ReviewQueue]:
             generated_at=datetime.now(timezone.utc),
             low_confidence=review_service.low_confidence_items(db),
             dna_unassigned=review_service.dna_unassigned_items(db),
-            merge_candidates=review_service.merge_candidate_items(db),
+            merge_candidates=merge_candidates,
+            merge_candidates_total=merge_candidates_total,
             observation_pairs=review_service.observation_pair_items(
                 db, max_date=max_date, all_performances=all_performances
             ),

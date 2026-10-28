@@ -12,8 +12,12 @@ class DnaRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_all(self) -> list[CreativeDNA]:
-        return list(self.db.scalars(select(CreativeDNA).order_by(CreativeDNA.code)).all())
+    def list_all(self, *, active_only: bool = True) -> list[CreativeDNA]:
+        """默认只出 active（契约 §1.2.3）；archived/merged 由管理列表按需查。"""
+        stmt = select(CreativeDNA).order_by(CreativeDNA.code)
+        if active_only:
+            stmt = stmt.where(CreativeDNA.status == "active")
+        return list(self.db.scalars(stmt).all())
 
     def get(self, dna_id: str) -> CreativeDNA | None:
         return self.db.scalar(select(CreativeDNA).where(CreativeDNA.id == dna_id))

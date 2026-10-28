@@ -162,6 +162,8 @@ cd apps/web && npm install && npm run dev   # 前端热更新，代理到 :8000
 cd apps/api && pytest                        # 后端测试
 ```
 
+离线归族实验及隐私/协作测试协议见 [docs/merge-family-experiment.md](docs/merge-family-experiment.md)。
+
 ## 数据与隐私
 
 详见 [PRIVACY.md](PRIVACY.md)。准确版：**原始素材与投放明细默认保存在你的机器上；AI 分析时，素材抽帧与结构化信息会发送至你在 Settings 配置的模型服务**（OpenAI 兼容接口，数据去向取决于你选的提供方）。我们只需要你的"判断"，不需要你的"资产"。

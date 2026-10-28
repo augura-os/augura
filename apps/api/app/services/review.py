@@ -232,7 +232,13 @@ def _observation_pair_refs() -> set[frozenset[str]]:
         return set()
 
 
-def merge_candidate_items(db: Session) -> list[ReviewItem]:
+def _build_merge_candidates(
+    db: Session, borderline_cap: int | None
+) -> list[ReviewItem]:
+    """三通道合并候选（H1 多市场同名 + H2 边界带 + H3 扫描器召回）。
+
+    borderline_cap：H2 边界带截断条数（None = 带内全部，供总数口径用）。
+    """
     items: list[ReviewItem] = []
 
     # 已登记为观察对（维持拆分）的组合不再出现在候选里——否则用户点完
@@ -321,9 +327,12 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
                 continue
             if find_prior_ruling(left.name, right.name) is not None:
                 continue
-            score = 0.6 * _filtered_similarity(
+            # 名字只占 0.3：creative_name 常有"前贴钩子锚定"偏差（10-21 盘点
+            # 约 40% 名字以钩子词为主），玩法本体相似度以 representative_text
+            # 为主通道；权重变化后边界带阈值由 B2 回测重新校准
+            score = 0.3 * _filtered_similarity(
                 left.name, right.name, generic_tokens
-            ) + 0.4 * (
+            ) + 0.7 * (
                 _filtered_similarity(
                     left.representative_text or left.name,
                     right.representative_text or right.name,
@@ -339,7 +348,7 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
             select(JudgeSuggestion).where(JudgeSuggestion.kind == "merge_pair")
         ).all()
     }
-    for score, left, right in scored[:BORDERLINE_LIMIT]:
+    for score, left, right in scored[:borderline_cap]:
         suggestion = suggestions.get((left.id, right.id)) or suggestions.get((right.id, left.id))
         items.append(
             ReviewItem(
@@ -395,6 +404,30 @@ def merge_candidate_items(db: Session) -> list[ReviewItem]:
             )
         )
     return items
+
+
+def merge_candidate_items(db: Session) -> list[ReviewItem]:
+    """现有口径（judge 管线共用）：H2 边界带只取前 BORDERLINE_LIMIT 条。"""
+    return _build_merge_candidates(db, borderline_cap=BORDERLINE_LIMIT)
+
+
+def merge_candidates_page(db: Session, *, limit: int) -> tuple[list[ReviewItem], int]:
+    """收件箱分页口径（P0b）：三通道合计去重后的 (前 limit 条, 总对数)。
+
+    总数 = 带内全部 + 多市场同名 + 扫描器召回，按 creative 对去重（同一对
+    被多个通道命中时保留先出现通道的条目，排序不变）；H2 边界带在此口径
+    不截断。
+    """
+    full = _build_merge_candidates(db, borderline_cap=None)
+    deduped: list[ReviewItem] = []
+    seen: set[frozenset[str | None]] = set()
+    for item in full:
+        key = frozenset((item.creative_id, item.related_creative_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:limit], len(deduped)
 
 
 def observation_pair_items(

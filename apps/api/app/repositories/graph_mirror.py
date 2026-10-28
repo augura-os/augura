@@ -39,7 +39,11 @@ def rebuild_mirror(db: Session, *, commit: bool = True) -> None:
     judge_pipeline 的 begin_nested 事务边界里，不能中途 commit）。
     """
     db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIRROR_LOCK_KEY})
-    dnas_by_id = {d.id: d for d in db.scalars(select(CreativeDNA)).all()}
+    # 图谱 DNA 层默认只出 active（契约 §1.2.3）：archived/merged 不进镜像
+    dnas_by_id = {
+        d.id: d
+        for d in db.scalars(select(CreativeDNA).where(CreativeDNA.status == "active"))
+    }
     creatives = list(db.scalars(select(Creative)).all())
     variants = list(db.scalars(select(CreativeVariant)).all())
     assets_by_id = {a.id: a for a in db.scalars(select(CreativeAsset)).all()}

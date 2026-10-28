@@ -24,6 +24,7 @@ def upsert_suggestion(
     verdict: str,
     votes: int,
     reason: str,
+    reason_params: dict | None = None,
 ) -> None:
     row = db.scalar(
         select(JudgeSuggestion).where(
@@ -41,6 +42,8 @@ def upsert_suggestion(
     row.verdict = verdict
     row.votes = votes
     row.reason = reason
+    if reason_params is not None:
+        row.reason_params = reason_params
     db.flush()
 
 

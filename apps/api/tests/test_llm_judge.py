@@ -1,18 +1,19 @@
-"""Tests for the LLM-judge layer: voting, classifier rules, pairwise consistency."""
+"""Tests for the LLM-judge layer: voting, classifier rules, fingerprint-card merge judge."""
 from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 from sqlalchemy.orm import Session
 
 from app.models import CreativeDNA
-from app.services import ip_pack, llm_judge
+from app.services import fingerprint_card, ip_pack, llm_judge
 from app.services.dna_classifier import _rule_suggest, suggest_dna
 from app.services.llm_judge import vote_json
-from app.services.merge_judge import judge_pair
+from app.services.merge_judge import PairEvidence, judge_pair
 from app.services.settings import AIConfig
 
 # 规则层关键词表（钩子原型/机制）属行业方法论，只在私有库 ip_pack 真版中；
@@ -103,36 +104,223 @@ class TestVoteJson:
         assert winner is None and count == 0
 
 
+def _evidence(text: str = "x") -> "PairEvidence":
+    return PairEvidence(structure=text, visual=text, gameplay=text)
+
+
+def _card_raw(
+    *,
+    family: str = "slg",
+    track: str = "sim-builder",
+    skeleton: str | None = "slg-zero-to-prosperity",
+    skeleton_new: str | None = None,
+    ending: str = "success",
+    **overrides: Any,
+) -> dict[str, Any]:
+    """符合 FingerprintCard schema 的 LLM 返回（值取骨架库内代码）。"""
+    raw: dict[str, Any] = {
+        "family": family,
+        "track": track,
+        "skeleton": skeleton,
+        "skeleton_new": skeleton_new,
+        "ending": ending,
+        "loop_signature": "base-builder",
+        "hook_fingerprint": "前 3 秒灾难钩",
+        "gameplay_fingerprint": "建造升级实机画面",
+        "presentation_tags": ["ugc-voiceover"],
+        "variant_notes": "换皮",
+        "misleading": False,
+    }
+    raw.update(overrides)
+    return raw
+
+
 class TestMergeJudge:
-    def test_unanimous_merge(self, monkeypatch) -> None:  # noqa: ANN001
+    """merge-judge-v4.1：LLM 打骨架指纹卡（每素材一次，按证据哈希缓存）
+    + 代码规则匹配 + 判异复核闸。mock 点在 fingerprint_card.complete_json
+    ——judge_pair 经 get_card → build_card → complete_json；判异时再经
+    recheck_split → complete_json（system=SPLIT_RECHECK_SYSTEM）。"""
+
+    @staticmethod
+    def _mock_cards(
+        monkeypatch,  # noqa: ANN001
+        mapping: dict[str, dict[str, Any] | None],
+        recheck: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """按证据文本片段路由打卡返回；system=SPLIT_RECHECK_SYSTEM 的调用
+        走复核闸固定返回（None=复核失败）。返回所有 user prompt。"""
+        calls: list[str] = []
+
+        def _fake(config, *, system, user, **kwargs):  # noqa: ANN001, ANN002, ANN202
+            calls.append(user)
+            if system == ip_pack.SPLIT_RECHECK_SYSTEM:
+                return recheck
+            evidence_text = user.rsplit("【素材分析证据】\n", 1)[-1]
+            for fragment, raw in mapping.items():
+                if fragment in evidence_text:
+                    return raw
+            raise AssertionError(f"未预设卡片的证据：{evidence_text[-80:]}")
+
+        monkeypatch.setattr(fingerprint_card, "complete_json", _fake)
+        return calls
+
+    def test_identical_cards_same_variant_family(self, monkeypatch) -> None:  # noqa: ANN001
         config = _FakeConfig()
-        monkeypatch.setattr(
-            "app.services.merge_judge.complete_json",
-            lambda *a, **k: {"same_creative": True, "reason": "Q4 仅语言差异"},
+        self._mock_cards(monkeypatch, {"a": _card_raw(), "b": _card_raw()})
+        judgement = judge_pair(
+            config, evidence_a=_evidence("a"), evidence_b=_evidence("b")
         )
-        judgement = judge_pair(config, analysis_a="a", analysis_b="b")
         assert judgement is not None
+        assert judgement.relation == "same_variant_family"
         assert judgement.same_creative is True
-        assert judgement.votes == 3
+        assert judgement.votes == 2  # v4 固定 2，不开放自动合并闸门
+        assert "slg-zero-to-prosperity" in judgement.reason
+        params = judgement.reason_params()
+        assert params["prompt_version"] == ip_pack.MERGE_JUDGE_PROMPT_VERSION
+        assert params["cards"]["a"]["skeleton"] == "slg-zero-to-prosperity"
+        assert params["cards"]["b"]["skeleton"] == "slg-zero-to-prosperity"
 
-    def test_split_vote_returns_none(self, monkeypatch) -> None:  # noqa: ANN001
+    def test_different_skeleton(self, monkeypatch) -> None:  # noqa: ANN001
         config = _FakeConfig()
-        answers = iter([
-            {"same_creative": True, "reason": "x"},
-            {"same_creative": False, "reason": "y"},
-            {"same_creative": True, "reason": "x"},
-        ])
-        monkeypatch.setattr(
-            "app.services.merge_judge.complete_json", lambda *a, **k: next(answers)
+        self._mock_cards(
+            monkeypatch,
+            {
+                "a": _card_raw(),
+                "b": _card_raw(skeleton="slg-pull-pin", ending="unknown"),
+            },
+            recheck={"split_confirmed": True, "reason": "骨架确属不同结构"},
         )
-        assert judge_pair(config, analysis_a="a", analysis_b="b") is None
+        judgement = judge_pair(
+            config, evidence_a=_evidence("a"), evidence_b=_evidence("b")
+        )
+        assert judgement is not None
+        assert judgement.relation == "different_concept"
+        assert judgement.same_creative is False
+        assert judgement.recheck == {
+            "split_confirmed": True, "reason": "骨架确属不同结构",
+        }
+        assert "复核确认" in judgement.reason
+        assert judgement.reason_params()["recheck"]["split_confirmed"] is True
 
-    def test_all_fail_returns_none(self, monkeypatch) -> None:  # noqa: ANN001
+    def test_different_track(self, monkeypatch) -> None:  # noqa: ANN001
         config = _FakeConfig()
-        monkeypatch.setattr(
-            "app.services.merge_judge.complete_json", lambda *a, **k: None
+        self._mock_cards(
+            monkeypatch,
+            {"a": _card_raw(), "b": _card_raw(track="tower-defense")},
+            recheck={"split_confirmed": True, "reason": "赛道分歧成立"},
         )
-        assert judge_pair(config, analysis_a="a", analysis_b="b") is None
+        judgement = judge_pair(
+            config, evidence_a=_evidence("a"), evidence_b=_evidence("b")
+        )
+        assert judgement is not None
+        assert judgement.relation == "different_concept"
+
+    def test_different_family(self, monkeypatch) -> None:  # noqa: ANN001
+        config = _FakeConfig()
+        self._mock_cards(
+            monkeypatch,
+            {
+                "a": _card_raw(),
+                "b": _card_raw(
+                    family="merge", track="gameplay", skeleton="mg-pure-merge",
+                    ending="none",
+                ),
+            },
+            recheck={"split_confirmed": True, "reason": "品类分歧成立"},
+        )
+        judgement = judge_pair(
+            config, evidence_a=_evidence("a"), evidence_b=_evidence("b")
+        )
+        assert judgement is not None
+        assert judgement.relation == "different_concept"
+
+    def test_same_skeleton_different_ending(self, monkeypatch) -> None:  # noqa: ANN001
+        """同骨架但结局 success vs fail（双方均非 unknown/none）→ 复核确认后判异。"""
+        config = _FakeConfig()
+        self._mock_cards(
+            monkeypatch,
+            {"a": _card_raw(ending="success"), "b": _card_raw(ending="fail")},
+            recheck={"split_confirmed": True, "reason": "结局分歧成立"},
+        )
+        judgement = judge_pair(
+            config, evidence_a=_evidence("a"), evidence_b=_evidence("b")
+        )
+        assert judgement is not None
+        assert judgement.relation == "different_concept"
+        assert "结局" in judgement.reason
+
+    def test_recheck_overturned_goes_grey(self, monkeypatch) -> None:  # noqa: ANN001
+        """复核闸推翻分歧（split_confirmed=false）→ 灰区人工，不落判异。"""
+        config = _FakeConfig()
+        self._mock_cards(
+            monkeypatch,
+            {"a": _card_raw(), "b": _card_raw(track="tower-defense")},
+            recheck={"split_confirmed": False, "reason": "证据边界模糊，赛道标签抖动"},
+        )
+        assert (
+            judge_pair(config, evidence_a=_evidence("a"), evidence_b=_evidence("b"))
+            is None
+        )
+
+    def test_recheck_failure_goes_grey(self, monkeypatch) -> None:  # noqa: ANN001
+        """复核调用失败（None）或返回结构非法 → 同样灰区，不落判异。"""
+        config = _FakeConfig()
+        for recheck in (None, {"split_confirmed": "yes"}, {"ok": True}):
+            self._mock_cards(
+                monkeypatch,
+                {"a": _card_raw(), "b": _card_raw(track="tower-defense")},
+                recheck=recheck,
+            )
+            assert (
+                judge_pair(config, evidence_a=_evidence("a"), evidence_b=_evidence("b"))
+                is None
+            )
+
+    def test_llm_failure_returns_none(self, monkeypatch) -> None:  # noqa: ANN001
+        """任一侧 complete_json 失败（None）→ 灰区。"""
+        config = _FakeConfig()
+        for mapping in (
+            {"a": None, "b": _card_raw()},
+            {"a": _card_raw(), "b": None},
+            {"a": None, "b": None},
+        ):
+            self._mock_cards(monkeypatch, mapping)
+            assert (
+                judge_pair(config, evidence_a=_evidence("a"), evidence_b=_evidence("b"))
+                is None
+            )
+
+    def test_skeleton_new_is_grey_zone(self, monkeypatch) -> None:  # noqa: ANN001
+        """skeleton=null + skeleton_new（库外新结构提案）→ 灰区人工命名。"""
+        config = _FakeConfig()
+        self._mock_cards(
+            monkeypatch,
+            {
+                "a": _card_raw(),
+                "b": _card_raw(skeleton=None, skeleton_new="slg-某新结构"),
+            },
+        )
+        assert (
+            judge_pair(config, evidence_a=_evidence("a"), evidence_b=_evidence("b"))
+            is None
+        )
+
+    def test_card_cache_dedupes_llm_calls(self, monkeypatch) -> None:  # noqa: ANN001
+        """同一 evidence 打两对（含跨对共享素材）：complete_json 只被调
+        2 次（不是 4 次）——回测 146 对里同素材重复出现的关键成本项。"""
+        config = _FakeConfig()
+        calls = self._mock_cards(
+            monkeypatch, {"a": _card_raw(), "b": _card_raw()},
+        )
+        cache: dict = {}
+        ev_a, ev_b = _evidence("a"), _evidence("b")
+        first = judge_pair(config, evidence_a=ev_a, evidence_b=ev_b,
+                           card_cache=cache)
+        second = judge_pair(config, evidence_a=ev_a, evidence_b=ev_b,
+                            card_cache=cache)
+        assert first is not None and second is not None
+        assert len(calls) == 2
+        assert len(cache) == 2
 
 
 class TestTemperature:

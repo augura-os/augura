@@ -96,7 +96,13 @@ export function refreshRecommendations(): Promise<{ transitions: number }> {
 }
 
 export function fetchReviewQueue(): Promise<ReviewQueue> {
-  return unwrap(apiClient.get<ApiResponse<ReviewQueue>>("/review/queue"));
+  // merge_limit=100：候选确定性排序，不带上限只出前 20 对（第 21 对永不可见）。
+  // 后端未支持该参数时忽略查询串，行为同旧版。
+  return unwrap(
+    apiClient.get<ApiResponse<ReviewQueue>>("/review/queue", {
+      params: { merge_limit: 100 },
+    }),
+  );
 }
 
 export function fetchEvolution(creativeId: string): Promise<EvolutionChain> {
@@ -163,6 +169,54 @@ export function dismissFamily(suggestionId: string): Promise<null> {
   );
 }
 
+// --- 批量接口（契约 §2：per-item 结果统一结构 + Idempotency-Key 幂等） --------
+
+export type BatchItemStatus = "success" | "skipped" | "failed";
+
+export type BatchItemReason =
+  | "empty_family"
+  | "not_found"
+  | "already_done"
+  | "conflict"
+  | "error"
+  | null;
+
+export interface BatchItemResult {
+  /** 输入项 id（confirm-families 为 suggestion_id，batch-assign 为 creative_id） */
+  id: string;
+  status: BatchItemStatus;
+  reason: BatchItemReason;
+  message?: string | null;
+  data?: Record<string, unknown> | null;
+}
+
+export interface BatchSummary {
+  success: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface BatchResponse {
+  results: BatchItemResult[];
+  summary: BatchSummary;
+}
+
+/** POST /dnas/confirm-families — 批量确认建族提案（按 AI 建议原样建族；
+ *  空族护栏由后端返回 skipped(reason="empty_family")）。批量同步执行 + 末尾
+ *  rebuild_mirror，放宽超时（与 suggestFamilies 同口径）。 */
+export function confirmFamiliesBatch(
+  suggestionIds: string[],
+  idempotencyKey: string,
+): Promise<BatchResponse> {
+  return unwrap(
+    apiClient.post<ApiResponse<BatchResponse>>(
+      "/dnas/confirm-families",
+      { suggestion_ids: suggestionIds },
+      { headers: { "Idempotency-Key": idempotencyKey }, timeout: 300000 },
+    ),
+  );
+}
+
 export function confirmRuleKeyword(suggestionId: string): Promise<null> {
   return unwrap(
     apiClient.post<ApiResponse<null>>("/dnas/rule-keywords/confirm", {
@@ -190,12 +244,45 @@ export function assignCreativeDna(
   );
 }
 
+/** POST /creatives/batch-assign-dna — 批量归入同一族（已在该族的项 skipped；
+ *  不存在的项 failed）。批量同步执行 + 末尾 rebuild_mirror，放宽超时。 */
+export function batchAssignDna(
+  creativeIds: string[],
+  dnaId: string,
+  idempotencyKey: string,
+): Promise<BatchResponse> {
+  return unwrap(
+    apiClient.post<ApiResponse<BatchResponse>>(
+      "/creatives/batch-assign-dna",
+      { creative_ids: creativeIds, dna_id: dnaId },
+      { headers: { "Idempotency-Key": idempotencyKey }, timeout: 300000 },
+    ),
+  );
+}
+
 export function closeSimilarPair(body: {
   source_creative_id: string;
   target_creative_id: string;
   reason?: string;
 }): Promise<unknown> {
   return unwrap(apiClient.post<ApiResponse<unknown>>("/graph/similar/close", body));
+}
+
+/** POST /graph/similar/bulk — 批量否决合并候选（登记观察对：不写裁决、
+ *  不删数据、不阻塞未来合并，可安全批量）。per-item id 为
+ *  "<creative_id>:<related_creative_id>"；已是观察对的项
+ *  skipped(reason="already_done")，已有结案裁决的项 skipped(reason="conflict")。 */
+export function linkSimilarBulk(
+  pairs: Array<{ creative_id: string; related_creative_id: string }>,
+  idempotencyKey: string,
+): Promise<BatchResponse> {
+  return unwrap(
+    apiClient.post<ApiResponse<BatchResponse>>(
+      "/graph/similar/bulk",
+      { pairs },
+      { headers: { "Idempotency-Key": idempotencyKey }, timeout: 300000 },
+    ),
+  );
 }
 
 // --- Assets ----------------------------------------------------------------

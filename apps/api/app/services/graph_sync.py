@@ -140,8 +140,8 @@ def delete_creative_node(settings: Settings, creative_id: str) -> None:
         logger.warning("Neo4j 删除 creative 节点失败: %s", exc)
 
 
-def reconcile_graph(db: Session, settings: Settings) -> None:
-    """Startup self-heal: reconcile Neo4j with PostgreSQL state.
+def reconcile_graph(db: Session, settings: Settings) -> bool:
+    """Reconcile Neo4j with PostgreSQL; return False when a retry is needed.
 
     Neo4j drifts silently — every sync helper here swallows errors by design
     (Neo4j down must not break the flow), and several PG delete paths never
@@ -184,5 +184,7 @@ def reconcile_graph(db: Session, settings: Settings) -> None:
             edge_count,
             len(assignments),
         )
+        return True
     except Exception as exc:  # noqa: BLE001 — Neo4j down must not block startup
         logger.warning("Neo4j 对账失败，继续（SQL 镜像仍有效）: %s", exc)
+        return False

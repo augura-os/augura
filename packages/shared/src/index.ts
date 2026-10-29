@@ -257,6 +257,15 @@ export interface ReviewItem {
   family: FamilyProposal | null;
   /** 规则词建议（kind="rule_keyword" 时携带） */
   rule_keyword: RuleKeywordProposal | null;
+  observation_status?: string | null;
+  observation_waiting_reason?: string | null;
+  next_evaluation_at?: string | null;
+  observation_evidence?: Record<string, unknown>;
+}
+
+export interface ObservationPage {
+  items: ReviewItem[];
+  total: number;
 }
 
 export interface InterventionWeek {
@@ -305,6 +314,9 @@ export interface ReviewQueue {
   dna_unassigned: ReviewItem[];
   merge_candidates: ReviewItem[];
   observation_pairs: ReviewItem[];
+  observing_pairs_total: number;
+  observation_sync_status: string;
+  observation_sync_error?: string | null;
   pending_verdicts: ReviewItem[];
   derivation_reviews: ReviewItem[];
   /** 建议归档（score 低 + 长期无消耗；人工确认才归档） */
@@ -637,6 +649,8 @@ export interface SettingsResponse {
   telemetry_instance_id: string;
   /** 合并自动执行开关（默认开；LLM 3/3 + pHash 对齐 ≥0.90 才自动合并） */
   merge_auto_enabled: boolean;
+  /** 观察对自动结案（默认关闭；需独立判例认证） */
+  observation_auto_close_enabled: boolean;
   /** 显示指标（顺序即展示顺序）；见 services/settings.DISPLAY_METRICS */
   metric_profile: string[];
   /** 参与 KEEP/ITERATE/PAUSE 判定的指标 */
@@ -674,6 +688,7 @@ export interface UpdateSettingsRequest {
   judge_temperature?: number;
   telemetry_enabled?: boolean;
   merge_auto_enabled?: boolean;
+  observation_auto_close_enabled?: boolean;
   metric_profile?: string[];
   judge_metrics?: string[];
   metric_thresholds?: Record<string, number>;

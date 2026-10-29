@@ -8,7 +8,6 @@ Merge/split return the full updated graph so the frontend can re-render.
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Header
@@ -19,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import DbDep, SettingsDep
 from app.config import Settings
 from app.exceptions import ApiError
-from app.models import Creative, CreativeVariant, SplitRuling, Tag, TagAssignment
+from app.models import Creative, CreativeVariant, Tag, TagAssignment
 from app.repositories.creatives import CreativeRepository, VariantRepository
 from app.repositories.edit_logs import EditLogRepository
 from app.repositories.graph_mirror import load_mirror, rebuild_mirror
@@ -282,41 +281,43 @@ def close_observation_pair(
     if target is None:
         raise ApiError(404, f"Creative 不存在：{payload.target_creative_id}")
 
+    from app.services import observation_resolution
+
     try:
-        graph_sync.get_graph_repository(settings).unlink_similar(source.id, target.id)
-        graph_sync.invalidate_similar_pairs_cache()
+        observation_resolution.close_observation_pair_tx(
+            db, settings, source, target, reason=payload.reason
+        )
     except Exception as exc:  # noqa: BLE001
         raise ApiError(502, f"Neo4j 观察对结案失败：{exc}") from exc
-
-    # 结案 = 维持拆分裁决：写入 split_rulings（幂等），否则这对会重新
-    # 浮回疑似待合并候选（只删边不留裁决 = 跑步机式循环）。
-    low, high = sorted((source.name, target.name))
-    existing = db.scalar(
-        select(SplitRuling).where(
-            SplitRuling.name_a == low, SplitRuling.name_b == high
-        )
-    )
-    if existing is None:
-        db.add(
-            SplitRuling(
-                id=str(uuid.uuid4()),
-                name_a=low,
-                name_b=high,
-                reason=payload.reason.strip(),
-                source="inbox_close",
-            )
-        )
-
-    EditLogRepository(db).record(
-        entity_type="creative",
-        entity_id=target.id,
-        action="update",
-        field="observation_pair",
-        old_value=f"{source.name} ↔ {target.name}",
-        new_value="结案（维持拆分）",
-    )
     db.commit()
     return ok(_current_graph(db, settings), message="已结案")
+
+
+@router.post("/graph/similar/reopen", response_model=Envelope[GraphOut])
+def reopen_observation_pair(
+    payload: SimilarCloseRequest, db: DbDep, settings: SettingsDep
+) -> Envelope[GraphOut]:
+    source, target = observation_ops.get_pair(
+        db, payload.source_creative_id, payload.target_creative_id
+    )
+    from app.services import observation_resolution
+
+    try:
+        observation_resolution.reopen_observation_pair_tx(
+            db, settings, source, target, reason=payload.reason
+        )
+        db.commit()
+    except ApiError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        try:
+            graph_sync.get_graph_repository(settings).unlink_similar(source.id, target.id)
+            graph_sync.invalidate_similar_pairs_cache()
+        except Exception:  # noqa: BLE001
+            logger.error("撤销观察结案后的图补偿失败", exc_info=True)
+        raise ApiError(502, f"撤销自动结案失败：{exc}") from exc
+    return ok(_current_graph(db, settings), message="已撤销自动结案")
 
 
 @router.post("/graph/split", response_model=Envelope[GraphOut])

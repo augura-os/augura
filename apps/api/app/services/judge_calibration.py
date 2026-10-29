@@ -10,8 +10,8 @@
 - 建议级采纳率：对 judge_suggestions 里的建议，看 left_id 实体后续的
   人工 edit_logs——与建议一致 = 采纳，不一致/实体被删 = 驳回，
   无后续动作 = 未决（不计入分母）
-- 改判率 > 30%（约 κ < 0.7）→ 对应类别 judge_auto_enabled:<kind>
-  降级为 false；生效条件 = 总闸开 AND 类别闸开（judge_auto_allowed）
+- 一般类别改判率 >30% 降级；observation_pair 独立使用 >3%，且只降不自动恢复。
+  生效条件 = 总闸开 AND 类别闸开（judge_auto_allowed）
 - 两层刹车模型（P0-2）：类别闸管"类别级失控"——单类别改判超限只降
   该类别，互不影响；总闸 judge_auto_enabled 定位为"系统性故障急停"，
   按整体条数加权（条数加权 = 体量 = 影响面），只有跨类别大面积改判
@@ -107,6 +107,8 @@ def _auto_kind(log: EditLog) -> str:
     if log.field == "cluster":
         # 聚类自动关联（pipeline._cluster 写入）；被人工移动/拆分 = 改判
         return "cluster"
+    if log.field == "observation_pair":
+        return "observation_pair"
     return "other"
 
 
@@ -397,19 +399,24 @@ def run_calibration(db: Session) -> CalibrationResult:
             BrakeEvent("master", MASTER_KEY, "restored", total, rate)
         )
 
-    # 类别闸：单类别超限只降该类别，互不影响（含 cluster/other 等动态桶）
+    # 类别闸：观察对独立 3% 改判上限，且只降不自动恢复。
     for kind, bucket in stats.items():
         if bucket.auto_total < MIN_SAMPLE:
             continue
         key = KIND_KEY_TEMPLATE.format(kind=kind)
         kind_current = repo.get(key) or "true"
-        if bucket.override_rate > OVERRIDE_RATE_LIMIT and kind_current != "false":
+        rate_limit = 0.03 if kind == "observation_pair" else OVERRIDE_RATE_LIMIT
+        if bucket.override_rate > rate_limit and kind_current != "false":
             _set_gate(db, key, "false")
             events.append(
                 BrakeEvent(kind, key, "downgraded",
                            bucket.auto_total, bucket.override_rate)
             )
-        elif bucket.override_rate <= OVERRIDE_RATE_LIMIT and kind_current == "false":
+        elif (
+            kind != "observation_pair"
+            and bucket.override_rate <= rate_limit
+            and kind_current == "false"
+        ):
             _set_gate(db, key, "true")
             events.append(
                 BrakeEvent(kind, key, "restored",

@@ -18,6 +18,7 @@ import type {
   LabReferenceListOut,
   LabVocabGapsResponse,
   MergeRequest,
+  ObservationPage,
   PerformanceRecord,
   ProductFactsImportResult,
   RecommendationReport,
@@ -101,6 +102,14 @@ export function fetchReviewQueue(): Promise<ReviewQueue> {
   return unwrap(
     apiClient.get<ApiResponse<ReviewQueue>>("/review/queue", {
       params: { merge_limit: 100 },
+    }),
+  );
+}
+
+export function fetchObservations(limit = 50, offset = 0): Promise<ObservationPage> {
+  return unwrap(
+    apiClient.get<ApiResponse<ObservationPage>>("/review/observations", {
+      params: { status: "observing", limit, offset },
     }),
   );
 }

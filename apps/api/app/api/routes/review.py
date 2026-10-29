@@ -15,6 +15,7 @@ from app.schemas.review import (
     HubSkew,
     InterventionDensity,
     InterventionWeek,
+    ObservationPage,
     ReviewQueue,
 )
 from app.services import intervention as intervention_service
@@ -22,6 +23,38 @@ from app.services import judge_calibration as judge_calibration_service
 from app.services import review as review_service
 
 router = APIRouter()
+
+
+@router.get("/review/observations", response_model=Envelope[ObservationPage])
+def observation_page(
+    db: DbDep,
+    status: Annotated[str, Query(pattern="^(observing|actionable)$")] = "observing",
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Envelope[ObservationPage]:
+    from sqlalchemy import func
+
+    from app.models import ObservationPair
+    from app.schemas.review import ObservationPage
+
+    max_date = db.scalar(select(Performance.date).order_by(Performance.date.desc()).limit(1))
+    rows = list(db.scalars(select(Performance)).all())
+    total = db.scalar(
+        select(func.count()).select_from(ObservationPair).where(ObservationPair.status == status)
+    ) or 0
+    return ok(
+        ObservationPage(
+            items=review_service.observation_pair_items(
+                db,
+                max_date=max_date,
+                all_performances=rows,
+                status=status,
+                limit=limit,
+                offset=offset,
+            ),
+            total=total,
+        )
+    )
 
 
 @router.get("/review/queue", response_model=Envelope[ReviewQueue])
@@ -47,6 +80,17 @@ def review_queue(
         for week in intervention_service.intervention_density(db)
     ]
     skew = intervention_service.attach_skew(db)
+    from sqlalchemy import func
+
+    from app.models import ObservationPair
+    from app.repositories.settings import SettingsRepository
+
+    observing_total = db.scalar(
+        select(func.count()).select_from(ObservationPair).where(
+            ObservationPair.status == "observing"
+        )
+    ) or 0
+    settings = SettingsRepository(db)
     return ok(
         ReviewQueue(
             generated_at=datetime.now(timezone.utc),
@@ -57,6 +101,9 @@ def review_queue(
             observation_pairs=review_service.observation_pair_items(
                 db, max_date=max_date, all_performances=all_performances
             ),
+            observing_pairs_total=observing_total,
+            observation_sync_status=settings.get("observation_sync_status") or "unknown",
+            observation_sync_error=settings.get("observation_sync_error"),
             pending_verdicts=review_service.pending_verdict_items(
                 db, all_performances=all_performances
             ),

@@ -37,6 +37,18 @@ class PerformanceRepository:
             self.db.add(performance)
             created.append(performance)
         self.db.flush()
+        if created:
+            from datetime import datetime, timezone
+
+            from sqlalchemy import update
+
+            from app.models import ObservationPair
+
+            self.db.execute(
+                update(ObservationPair)
+                .where(ObservationPair.status.in_(["observing", "actionable"]))
+                .values(next_evaluation_at=datetime.now(timezone.utc))
+            )
         return created
 
     def list_for_asset(self, asset_id: str) -> list[Performance]:

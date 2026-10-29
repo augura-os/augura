@@ -15,7 +15,7 @@ Four categories:
                      in different creatives) and borderline similarity (token
                      score in [0.20, CLUSTER_THRESHOLD) — just below the
                      auto-cluster bar, the human ruling zone)
-- observation_pairs: open SIMILAR_TO pairs with both sides' spend/cpp
+- observation_pairs: 仅 actionable 进入默认队列；observing 在独立后台视图查询
 - pending_verdicts:  裂变边待人工判定有效/无效（轻量实验复核）
 - derivation_reviews: 测量层/LLM 对裂变因子的复核建议（judge_suggestions
                      kind="derivation-factor"）：疑似误链待解链、因子建议待采纳
@@ -246,10 +246,11 @@ def _build_merge_candidates(
     observed = _observation_pair_refs()
     # 已结案（split_rulings）的组合永久排除——结案只删 SIMILAR_TO 边，
     # 不留裁决的话同一对会跑步机式回流候选（v0.11 教训）。
-    ruled = {
-        frozenset((row.name_a, row.name_b))
-        for row in db.scalars(select(SplitRuling)).all()
-    }
+    ruled: set[frozenset[str]] = set()
+    for row in db.scalars(select(SplitRuling)).all():
+        ruled.add(frozenset((row.name_a, row.name_b)))
+        if row.creative_id_a and row.creative_id_b:
+            ruled.add(frozenset((row.creative_id_a, row.creative_id_b)))
     prefixes = markets.resolve_market_prefixes(db)
     generic_tokens = markets.resolve_generic_tokens(db)
     # 合并卡片素材预览：每个 creative 取最早变体的素材 id（缩略图/播放用）
@@ -435,68 +436,75 @@ def observation_pair_items(
     *,
     max_date: date | None,
     all_performances: Sequence[Performance] | None = None,
+    status: str = "actionable",
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[ReviewItem]:
-    try:
-        from app.config import get_settings
-        from app.services import graph_sync
+    from app.models import ObservationPair
 
-        pairs = graph_sync.read_similar_pairs_cached(get_settings())
-    except Exception:  # noqa: BLE001 — Neo4j 不可用时观察对留空
-        return []
-    creatives = {c.id: c for c in db.scalars(select(Creative)).all()}
+    pairs = list(
+        db.scalars(
+            select(ObservationPair)
+            .where(ObservationPair.status == status)
+            .order_by(ObservationPair.created_at, ObservationPair.id)
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+    creative_ids = {x for pair in pairs for x in (pair.creative_id_a, pair.creative_id_b)}
+    creatives = {
+        creative.id: creative
+        for creative in db.scalars(select(Creative).where(Creative.id.in_(creative_ids))).all()
+    } if creative_ids else {}
     suggestions = {
         (row.left_id, row.right_id): row
         for row in db.scalars(
             select(JudgeSuggestion).where(JudgeSuggestion.kind == "observation_pair")
         ).all()
     }
+
+    def _brief(creative: Creative) -> tuple[str, float, float | None]:
+        rows = rec.collect_creative_performance(
+            db, creative, all_performances=all_performances
+        )
+        metrics = rec.aggregate(
+            creative, None, None, rows, max_date=max_date, variant_count=1
+        )
+        return creative.name, metrics.spend, metrics.cpp
+
     items: list[ReviewItem] = []
-    for source_ref, target_ref in pairs:
-        source = creatives.get(source_ref)
-        target = creatives.get(target_ref)
+    for pair in pairs:
+        source = creatives.get(pair.creative_id_a)
+        target = creatives.get(pair.creative_id_b)
         if source is None or target is None:
             continue
         suggestion = suggestions.get((source.id, target.id)) or suggestions.get(
             (target.id, source.id)
         )
-
-        def _brief(creative: Creative) -> tuple[str, float, float | None]:
-            """（名称, 消耗, cpp）原始值——i18n 参数与 legacy 文案共用同一份。"""
-            rows = rec.collect_creative_performance(
-                db, creative, all_performances=all_performances
-            )
-            metrics = rec.aggregate(
-                creative, None, None, rows, max_date=max_date, variant_count=1
-            )
-            return creative.name, metrics.spend, metrics.cpp
-
-        def _brief_text(brief: tuple[str, float, float | None]) -> str:
-            name, spend, cpp = brief
-            cpp_s = f"${cpp:,.2f}" if cpp else "-"
-            return f"{name}（消耗 ${spend:,.0f} / 成本 {cpp_s}）"
-
         source_brief = _brief(source)
         target_brief = _brief(target)
+        waiting = status == "observing"
+        reason_params = {
+            "source_name": source_brief[0],
+            "source_spend": source_brief[1],
+            "source_cpp": source_brief[2],
+            "target_name": target_brief[0],
+            "target_spend": target_brief[1],
+            "target_cpp": target_brief[2],
+            "waiting_reason": pair.waiting_reason,
+        }
         items.append(
             ReviewItem(
                 kind="observation_pair",
                 title=f"{source.name} ↔ {target.name}",
-                # legacy fallback：旧客户端直接渲染 reason
                 reason=(
-                    "观察对未结案："
-                    + _brief_text(source_brief)
-                    + " vs "
-                    + _brief_text(target_brief)
+                    f"后台观察（{pair.waiting_reason}）：{source.name} vs {target.name}"
+                    if waiting else
+                    f"观察对待裁决：{source.name}（消耗 ${source_brief[1]:,.0f}）"
+                    f" vs {target.name}（消耗 ${target_brief[1]:,.0f}）"
                 ),
-                reason_code="observation_open",
-                reason_params={
-                    "source_name": source_brief[0],
-                    "source_spend": source_brief[1],
-                    "source_cpp": source_brief[2],
-                    "target_name": target_brief[0],
-                    "target_spend": target_brief[1],
-                    "target_cpp": target_brief[2],
-                },
+                reason_code="observation_waiting" if waiting else "observation_open",
+                reason_params=reason_params,
                 creative_id=source.id,
                 creative_name=source.name,
                 related_creative_id=target.id,
@@ -504,6 +512,10 @@ def observation_pair_items(
                 suggestion=suggestion.verdict if suggestion else None,
                 suggestion_votes=suggestion.votes if suggestion else None,
                 suggestion_reason=suggestion.reason if suggestion else None,
+                observation_status=pair.status,
+                observation_waiting_reason=pair.waiting_reason,
+                next_evaluation_at=pair.next_evaluation_at,
+                observation_evidence=pair.evidence,
             )
         )
     return items

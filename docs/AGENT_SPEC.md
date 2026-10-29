@@ -107,6 +107,7 @@ Project、Creative、CreativeVariant、CreativeAsset、Performance、Tag、TagAs
 
 节点标签：`Creative` / `Variant` / `Asset` / `Tag`（属性含 `ref_id` 对应 SQL 主键、`label`）。
 关系：`(CreativeDNA)-[:HAS_CREATIVE]->(Creative)-[:HAS_VARIANT]->(Variant)-[:HAS_ASSET]->(Asset)-[:HAS_TAG]->(Tag)`；`(Creative)-[:SIMILAR_TO]->(Creative)` 表达观察对（边界规则 §4.1），仅存单方向（ref_id 小者为源），带 `reason` 属性。
+观察对的工作流状态由 PostgreSQL `observation_pairs` 管理：`observing` 在后台等待证据，不进入默认收件箱角标；`actionable` 才需要人工处理；`resolved_split` 表示结案维持拆分。`observation_evaluations` 保存追加式 shadow/正式评估证据。`GET /review/observations?status=observing` 单独查询后台列表。效果分层裁决使用 `performance_split`，不得当作语义不同创意的训练标签；自动结案默认关闭，须由独立判例验证后显式开启。
 `packages/graph` 提供 `GraphRepository`（同步 driver 即可），封装 upsert/delete/merge/split/read_graph，供 FastAPI 调用。包名 `creative-graph`，模块名 `graph`，`src/` 布局，含 `pyproject.toml`。
 
 ## 8. 环境变量（compose 已注入，后端读取）

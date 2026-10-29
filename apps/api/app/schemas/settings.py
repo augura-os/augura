@@ -25,6 +25,8 @@ class SettingsInfo(BaseModel):
     # 合并自动执行开关（默认开；开启后 LLM 3/3 + pHash 对齐 ≥0.90 的合并
     # 候选对不再只写建议，由 judge_pipeline 直接执行并标 auto:）
     merge_auto_enabled: bool = True
+    # 观察对自动结案默认关闭；须由独立判例认证后显式开启
+    observation_auto_close_enabled: bool = False
     # 指标配置（v0.11）：显示 profile / 参与判定的指标 / 阈值
     metric_profile: list[str] = []
     judge_metrics: list[str] = []
@@ -87,6 +89,7 @@ class SettingsUpdate(BaseModel):
     judge_temperature: float | None = None
     telemetry_enabled: bool | None = None
     merge_auto_enabled: bool | None = None
+    observation_auto_close_enabled: bool | None = None
     metric_profile: list[str] | None = None
     judge_metrics: list[str] | None = None
     metric_thresholds: dict[str, float] | None = None

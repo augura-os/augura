@@ -66,6 +66,31 @@ def test_db_url() -> Iterator[str]:
         conn.execute(text(f"DROP DATABASE IF EXISTS {TEST_DB_NAME}"))
 
 
+def _blocked_neo4j(_settings):
+    raise RuntimeError(
+        "Neo4j is disabled in tests; provide AUGURA_TEST_NEO4J=1 and "
+        "AUGURA_TEST_NEO4J_URI for a dedicated test graph"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_neo4j(monkeypatch) -> Iterator[None]:
+    """Keep SQL-only tests from mutating the developer's real graph."""
+    from app.config import get_settings
+    from app.services import graph_sync
+
+    if os.environ.get("AUGURA_TEST_NEO4J") == "1":
+        uri = os.environ.get("AUGURA_TEST_NEO4J_URI", "")
+        if not uri or uri in {"bolt://localhost:7687", "bolt://neo4j:7687"}:
+            pytest.fail("Graph integration tests require a dedicated AUGURA_TEST_NEO4J_URI")
+        monkeypatch.setenv("NEO4J_URI", uri)
+    else:
+        monkeypatch.setattr(graph_sync, "get_graph_repository", _blocked_neo4j)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _clear_similar_pairs_cache() -> Iterator[None]:
     # graph_sync 的 SIMILAR_TO 读取带 300s TTL 进程内缓存；测试用 monkeypatch

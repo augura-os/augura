@@ -37,6 +37,7 @@ fix(api): coerce string list fields from JSON Mode providers
 ## 4. Testing
 
 - Backend: `apps/api/tests/` (pytest). Pure-logic unit tests + Postgres integration tests (separate test databases; skipped automatically when no DB is reachable).
+- SQL-only tests block real Neo4j writes by default. Graph integration tests require `AUGURA_TEST_NEO4J=1` and a dedicated `AUGURA_TEST_NEO4J_URI`; never point them at a development or production graph.
 - Frontend: `apps/web/src/**/*.test.ts` (vitest).
 - Cover critical paths; don't chase coverage numbers. New features ship with critical-path tests; bug fixes start with a reproduction test.
 - Database migrations must be downgrade-able; the upgrade→downgrade→upgrade round-trip in `test_migrations.py` is a CI gate.

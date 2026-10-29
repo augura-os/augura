@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -50,20 +51,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     threading.Thread(target=_flush_telemetry_bg, daemon=True).start()
     # 启动时后台对账 Neo4j：幽灵节点/幽灵边会在 /graph（Neo4j 优先读）
     # 直接渲染成重复节点；sync 写入静默失败的设定决定了漂移必然累积，
-    # 每次启动按 PG 状态自愈一次（Neo4j 未就绪时内部静默跳过）。
+    # Neo4j 慢启动时由后台任务有界重试，API 本身不等待。
     threading.Thread(target=_reconcile_graph_bg, daemon=True).start()
     yield
 
 
-def _reconcile_graph_bg() -> None:
-    try:
-        from app.database import SessionLocal
-        from app.services import graph_sync
+def _reconcile_graph_bg(
+    *,
+    retry_delays: tuple[float, ...] = (1, 2, 5, 10, 20, 30),
+    sleep=time.sleep,
+) -> bool:
+    from app.database import SessionLocal
+    from app.services import graph_sync
 
-        with SessionLocal() as db:
-            graph_sync.reconcile_graph(db, get_settings())
-    except Exception as exc:  # noqa: BLE001 — 失败静默，不影响主流程
-        logger.debug("graph reconcile on startup skipped: %s", exc)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            with SessionLocal() as db:
+                if graph_sync.reconcile_graph(db, get_settings()):
+                    logger.info("Neo4j 启动对账成功（第 %d 次尝试）", attempt + 1)
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Neo4j 启动对账异常（第 %d 次）：%s", attempt + 1, exc)
+        if attempt < len(retry_delays):
+            sleep(retry_delays[attempt])
+    logger.error("Neo4j 启动对账在 %d 次尝试后仍未成功", len(retry_delays) + 1)
+    return False
 
 
 def _flush_telemetry_bg() -> None:

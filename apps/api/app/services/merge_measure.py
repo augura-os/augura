@@ -2,8 +2,8 @@
 
 LLM 预裁只看文本分析（hook/conflict/gameplay），换皮/误配对在文本上
 可能高度相似；合并是不可逆操作，所以自动执行前加一道视频内容证据——
-复用裂变侧的测量层（services/variant_diff.measure_pair），双方各取
-第一个视频变体做帧对齐，aligned_fraction 作为"同一素材源"的物证。
+复用裂变侧的测量层（services/variant_diff），双方各取第一个视频变体，
+按不可变素材键共享帧哈希与元数据缓存，aligned_fraction 作为同源物证。
 
 全程容错：无视频变体 / 下载失败 / 测量失败一律返回 None（调用方按
 "证据不足"处理——只写建议，绝不自动合并）。
@@ -18,16 +18,23 @@ tier-1，但边缘未匹配段 + 中段基本无发散（≤ TIER2_MAX_DIVERGENT
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.services.storage import StorageService
-from app.services.variant_diff import VariantDiff, VideoMeta, classify, measure_pair
+from app.services.variant_diff import (
+    VariantDiff,
+    VideoMeta,
+    align_sequences,
+    classify,
+    frame_phash_sequence,
+    probe_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +101,33 @@ def first_video_asset(db: Session, creative_id: str) -> tuple[str, str] | None:
     return row[1], row[2]
 
 
+@lru_cache(maxsize=2048)
+def cached_video_signature(storage_key: str, suffix: str) -> tuple[tuple[int, ...], VideoMeta]:
+    """按不可变素材键缓存帧哈希与元数据；失败不缓存，供召回和测量共用。"""
+    storage = StorageService(get_settings())
+    with tempfile.TemporaryDirectory(prefix="merge-measure-") as tmp_dir:
+        local = str(Path(tmp_dir) / f"source{suffix}")
+        storage.download_to(storage_key, local)
+        meta = probe_metadata(local)
+        hashes = tuple(frame_phash_sequence(local))
+    return hashes, meta
+
+
+def _measure_cached(
+    asset_a: tuple[str, str], asset_b: tuple[str, str]
+) -> tuple[VideoMeta, VideoMeta, VariantDiff]:
+    hashes_a, meta_a = cached_video_signature(asset_a[0], Path(asset_a[1]).suffix.lower())
+    hashes_b, meta_b = cached_video_signature(asset_b[0], Path(asset_b[1]).suffix.lower())
+    diff = align_sequences(list(hashes_a), list(hashes_b))
+    if meta_a.width and meta_b.width:
+        diff.resolution_changed = (meta_a.width, meta_a.height) != (
+            meta_b.width,
+            meta_b.height,
+        )
+    diff.duration_diff_sec = meta_b.duration - meta_a.duration
+    return meta_a, meta_b, diff
+
+
 def measure_pair_evidence(
     db: Session,
     settings: Settings,
@@ -107,23 +141,13 @@ def measure_pair_evidence(
     ≤ TIER2_MAX_DIVERGENT_SEGMENTS 时带出；None / not-a-derivation /
     aspect-ratio 等一律返回 None 作为 factor。
     """
+    del settings  # 签名缓存键只含不可变素材键；存储配置由进程统一设置提供
     try:
         asset_a = first_video_asset(db, creative_a_id)
         asset_b = first_video_asset(db, creative_b_id)
         if asset_a is None or asset_b is None:
             return None
-        storage = StorageService(settings)
-        # 系统临时目录而非 settings.upload_dir：容器默认 /app/uploads 在
-        # CI runner 等无权限路径上 mkdir 会 PermissionError
-        tmp_dir = Path(tempfile.mkdtemp(prefix="merge-measure-"))
-        try:
-            path_a = str(tmp_dir / f"a{Path(asset_a[1]).suffix.lower()}")
-            path_b = str(tmp_dir / f"b{Path(asset_b[1]).suffix.lower()}")
-            storage.download_to(asset_a[0], path_a)
-            storage.download_to(asset_b[0], path_b)
-            meta_a, meta_b, diff = measure_pair(path_a, path_b)
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        meta_a, meta_b, diff = _measure_cached(asset_a, asset_b)
         factor = tier2_factor(diff, meta_a, meta_b)
         return diff.aligned_fraction, factor
     except Exception:  # noqa: BLE001 — 测量失败 = 证据不足，不抛给判定主流程

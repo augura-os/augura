@@ -168,6 +168,16 @@ class TestClassifyError:
     def test_429_is_retryable(self) -> None:
         assert worker.classify_error(Exception("Error code: 429 - rate limit")) == "retryable"
 
+    def test_usage_limit_rate_limit_is_not_quota_exhaustion(self) -> None:
+        exc = Exception("Error code: 429 - usage limit per minute; retry in 1s")
+        assert worker.classify_error(exc) == "retryable"
+
+    def test_weekly_quota_waits_instead_of_retrying(self) -> None:
+        exc = Exception(
+            "Error code: 429 - weekly usage limit; exceeded_current_quota_error"
+        )
+        assert worker.classify_error(exc) == "quota"
+
     def test_openai_500_is_retryable(self) -> None:
         request = httpx.Request("POST", "http://fake.local/v1/chat/completions")
         exc = openai.InternalServerError(
@@ -570,6 +580,25 @@ class TestExecuteJobOutcome:
         assert job.status == "waiting_user"  # type: ignore[union-attr]
         assert job.error_code == "auth"  # type: ignore[union-attr]
         assert "Settings" in job.error_message  # type: ignore[operator]
+
+    def test_quota_failure_waits_without_consuming_attempt(
+        self, worker_session: Session, monkeypatch
+    ) -> None:
+        _asset, job = self._seed_running_job(
+            worker_session, "KS_FAKE-260901-exec-quota.mp4"
+        )
+
+        def _raise(*_a, **_k) -> None:  # noqa: ANN001
+            raise Exception("weekly usage limit; exceeded_current_quota_error")
+
+        monkeypatch.setattr(worker, "_run_analysis_pipeline", _raise)
+        worker._execute_job(job.id)
+        worker_session.expire_all()
+        job = JobRepository(worker_session).get(job.id)
+        assert job.status == "waiting_user"  # type: ignore[union-attr]
+        assert job.error_code == "quota"  # type: ignore[union-attr]
+        assert job.attempt == 0  # type: ignore[union-attr]
+        assert "额度" in job.error_message  # type: ignore[operator]
 
     def test_retryable_failure_requeues_with_backoff(
         self, worker_session: Session, monkeypatch

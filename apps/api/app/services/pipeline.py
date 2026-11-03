@@ -395,11 +395,13 @@ def _run_judge_phase(creative_id: str) -> None:
     独立 session（照 run_analysis_pipeline 模式）；run_post_analysis 内部
     已全程容错，外层 try 只是兜底——判定失败绝不翻转已提交的 completed。
     """
+    from app.services.fingerprint_card import shared_card_cache_stats
     from app.services.judge_pipeline import _JUDGE_SLOTS, run_post_analysis
 
     with _JUDGE_SLOTS:
         settings = get_settings()
         db = SessionLocal()
+        before = shared_card_cache_stats()
         try:
             config = resolve_ai_config(db, settings)
             run_post_analysis(db, config, creative_id, settings=settings)
@@ -407,6 +409,14 @@ def _run_judge_phase(creative_id: str) -> None:
             logger.exception("判定阶段失败 creative=%s", creative_id)
         finally:
             db.close()
+            after = shared_card_cache_stats()
+            logger.info(
+                "指纹卡缓存：跨任务命中 %d，新计算 %d（缓存 %d/%d）",
+                after["hits"] - before["hits"],
+                after["misses"] - before["misses"],
+                after["size"],
+                after["limit"],
+            )
 
 
 def _update_job_stage(job_id: str | None, stage: str) -> None:

@@ -1,6 +1,6 @@
 """Tests for merge_measure.measure_pair_evidence（tier-2 证据带出）。
 
-下载与 measure_pair 全部 mock；classify 走真实实现（被测对象就是
+缓存测量入口全部 mock；classify 走真实实现（被测对象就是
 "测量 diff → 白名单因子"的过滤逻辑）。
 """
 from __future__ import annotations
@@ -70,7 +70,7 @@ class TestMeasurePairEvidence:
         )
         monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
         monkeypatch.setattr(
-            merge_measure, "measure_pair", _measure(diff, duration_b=45.0)
+            merge_measure, "_measure_cached", _measure(diff, duration_b=45.0)
         )
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
@@ -88,7 +88,7 @@ class TestMeasurePairEvidence:
         )
         monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
         monkeypatch.setattr(
-            merge_measure, "measure_pair", _measure(diff, duration_b=44.0)
+            merge_measure, "_measure_cached", _measure(diff, duration_b=44.0)
         )
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
@@ -104,7 +104,7 @@ class TestMeasurePairEvidence:
             unmatched_suffix_sec=0.0,
         )
         monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
-        monkeypatch.setattr(merge_measure, "measure_pair", _measure(diff))
+        monkeypatch.setattr(merge_measure, "_measure_cached", _measure(diff))
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
         ) == (0.45, None)
@@ -123,7 +123,7 @@ class TestMeasurePairEvidence:
         )
         monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
         monkeypatch.setattr(
-            merge_measure, "measure_pair", _measure(diff, duration_b=33.0)
+            merge_measure, "_measure_cached", _measure(diff, duration_b=33.0)
         )
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
@@ -149,7 +149,7 @@ class TestMeasurePairEvidence:
                 ],
             )
             monkeypatch.setattr(
-                merge_measure, "measure_pair", _measure(diff, duration_b=33.0)
+                merge_measure, "_measure_cached", _measure(diff, duration_b=33.0)
             )
             assert measure_pair_evidence(
                 db_session, Settings(), a.id, b.id
@@ -166,7 +166,7 @@ class TestMeasurePairEvidence:
             unmatched_suffix_sec=0.0,
         )
         monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
-        monkeypatch.setattr(merge_measure, "measure_pair", _measure(diff))
+        monkeypatch.setattr(merge_measure, "_measure_cached", _measure(diff))
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
         ) == (0.95, None)
@@ -188,7 +188,7 @@ class TestMeasurePairEvidence:
             ), diff
 
         monkeypatch.setattr(merge_measure, "StorageService", _FakeStorage)
-        monkeypatch.setattr(merge_measure, "measure_pair", _run)
+        monkeypatch.setattr(merge_measure, "_measure_cached", _run)
         assert measure_pair_evidence(
             db_session, Settings(), a.id, b.id
         ) == (0.20, None)
@@ -202,7 +202,7 @@ class TestMeasurePairEvidence:
         def _boom(_a: str, _b: str):  # noqa: ANN202
             raise RuntimeError("ffmpeg 炸了")
 
-        monkeypatch.setattr(merge_measure, "measure_pair", _boom)
+        monkeypatch.setattr(merge_measure, "_measure_cached", _boom)
         assert measure_pair_evidence(db_session, Settings(), a.id, b.id) is None
         assert measure_pair_alignment(db_session, Settings(), a.id, b.id) is None
 

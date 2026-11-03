@@ -20,14 +20,18 @@ from app.models import (
     JudgeSuggestion,
     SplitRuling,
 )
-from app.services import merge_ops, missed_merge_scan
+from app.services import merge_measure, merge_ops, missed_merge_scan
 from app.services.merge_judge import MergeJudgement
+from app.services.missed_merge_scan import (
+    _visual_signatures as compute_visual_signatures,
+)
 from app.services.missed_merge_scan import (
     cleanup_orphan_merge_suggestions,
     recall_pairs,
     scan_missed_merges,
     visual_overlap,
 )
+from app.services.variant_diff import VideoMeta
 
 
 def _creative(
@@ -72,6 +76,13 @@ def _no_visual(monkeypatch) -> None:
         missed_merge_scan, "_visual_signatures",
         lambda db, settings, ids, emit: {},
     )
+
+
+@pytest.fixture(autouse=True)
+def _clear_signature_cache():
+    merge_measure.cached_video_signature.cache_clear()
+    yield
+    merge_measure.cached_video_signature.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -138,7 +149,7 @@ class TestRecall:
         dna = CreativeDNA(id=str(uuid.uuid4()), code="D1", name="同族")
         db_session.add(dna)
         db_session.flush()
-        # 同族排除
+        # 同 DNA 是玩法模式相同，不排除 Creative 变体合并
         a = _creative(db_session, "alpha-beta-gamma-delta-epsilon", dna_id=dna.id)
         b = _creative(db_session, "alpha-beta-x1-x2-x3", dna_id=dna.id)
         # split_rulings 排除
@@ -157,7 +168,7 @@ class TestRecall:
         db_session.flush()
         pairs = recall_pairs(db_session, Settings())
         ids = {frozenset((p.left.id, p.right.id)) for p in pairs}
-        assert frozenset((a.id, b.id)) not in ids
+        assert frozenset((a.id, b.id)) in ids
         assert frozenset((c.id, d.id)) not in ids
         assert all(e.id not in pair for pair in ids)
 
@@ -184,6 +195,47 @@ class TestVisualOverlap:
     def test_empty(self) -> None:
         assert visual_overlap([], [1]) == 0.0
         assert visual_overlap([1], []) == 0.0
+
+
+class TestVisualSignatureCache:
+    def test_reuses_signature_across_scans(
+        self, db_session: Session, monkeypatch
+    ) -> None:
+        downloads: list[str] = []
+        computed: list[str] = []
+
+        class _Storage:
+            def download_to(self, key: str, _local: str) -> None:
+                downloads.append(key)
+
+        monkeypatch.setattr(
+            merge_measure, "StorageService", lambda _settings: _Storage()
+        )
+        monkeypatch.setattr(
+            merge_measure, "probe_metadata",
+            lambda _path: VideoMeta(1080, 1920, 30.0, True),
+        )
+        monkeypatch.setattr(
+            missed_merge_scan, "first_video_asset",
+            lambda _db, creative_id: (f"test/{creative_id}", "video.mp4"),
+        )
+
+        def _fake_frames(_path: str) -> list[int]:
+            computed.append(_path)
+            return [len(computed)]
+
+        monkeypatch.setattr(merge_measure, "frame_phash_sequence", _fake_frames)
+        creative_ids = ["creative-a", "creative-b"]
+        first = compute_visual_signatures(
+            db_session, Settings(), creative_ids, lambda _message: None
+        )
+        second = compute_visual_signatures(
+            db_session, Settings(), creative_ids, lambda _message: None
+        )
+        assert first == {"creative-a": [1], "creative-b": [2]}
+        assert second == first
+        assert len(downloads) == 2
+        assert len(computed) == 2
 
 
 class TestOrphanCleanup:
@@ -215,7 +267,7 @@ class TestScan:
             missed_merge_scan, "judge_pair",
             lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
                 relation="same_variant_family" if same else "different_concept",
-                votes=3, reason="判定理由",
+                votes=2, reason="判定理由",
             ),
         )
 
@@ -310,7 +362,7 @@ class TestTier2FactorGate:
         monkeypatch.setattr(
             missed_merge_scan, "judge_pair",
             lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
-                relation="same_variant_family", votes=3, reason="判定理由",
+                relation="same_variant_family", votes=2, reason="判定理由",
             ),
         )
 
@@ -323,10 +375,13 @@ class TestTier2FactorGate:
     def test_intro_sticker_factor_auto_merges(
         self, db_session: Session, monkeypatch
     ) -> None:
-        # 15s 前贴 + 30s 全片：对齐率 ≈0.5（< 0.90），但测量判定
-        # intro-sticker → tier-2 证据成立，自动合并
-        a = _creative(db_session, "lava-escape-a1-b2-c3")
-        b = _creative(db_session, "lava-escape-x1-y2-z3")
+        # 同 DNA + v4 双卡判同 + intro-sticker 物证：不因旧同族排除或
+        # 旧三票门槛漏掉可安全自动合并的变体
+        dna = CreativeDNA(id=str(uuid.uuid4()), code="D1", name="模式甲")
+        db_session.add(dna)
+        db_session.flush()
+        a = _creative(db_session, "lava-escape-a1-b2-c3", dna_id=dna.id)
+        b = _creative(db_session, "lava-escape-x1-y2-z3", dna_id=dna.id)
         self._patch_judge(monkeypatch)
         monkeypatch.setattr(
             missed_merge_scan, "measure_pair_evidence",
@@ -470,16 +525,19 @@ class TestEmbeddingRecall:
         assert pair.embedding_score is not None
         assert "文本" in pair.evidence and "向量" in pair.evidence
 
-    def test_exclusions_apply(self, db_session: Session) -> None:
-        # 同族（同 DNA）即使向量同向也永不召回——排除规则四路一致
-        dna = CreativeDNA(id=str(uuid.uuid4()), code="D1", name="同族")
+    def test_same_dna_embedding_recall_allowed(self, db_session: Session) -> None:
+        # 同 DNA 只表示玩法模式相同，向量命中的变体仍应进入判定
+        dna = CreativeDNA(id=str(uuid.uuid4()), code="D1", name="模式甲")
         db_session.add(dna)
         db_session.flush()
         a = _creative(db_session, "alpha-x1-y1-z1", dna_id=dna.id)
         b = _creative(db_session, "omega-q9-w8-e7", dna_id=dna.id)
         self._embed(db_session, a, [1.0, 0.0])
         self._embed(db_session, b, [1.0, 0.0])
-        assert recall_pairs(db_session, Settings()) == []
+        pairs = recall_pairs(db_session, Settings())
+        assert len(pairs) == 1
+        assert {pairs[0].left.id, pairs[0].right.id} == {a.id, b.id}
+        assert pairs[0].embedding_score == 1.0
 
     def test_scoped_only_anchor_pairs(self, db_session: Session) -> None:
         # scoped 局部重扫：向量路也只产出 anchor 相关对（b ↔ c 不进候选池）
@@ -517,7 +575,7 @@ class TestEmbeddingScanFlow:
     def test_dual_evidence_gate_still_required(
         self, db_session: Session, monkeypatch
     ) -> None:
-        """向量召回的对走同一自动合并闸门：3/3 + pHash 对齐 + 双闸开才合并。"""
+        """向量召回走同一闸门：v4 双卡判同 + 视频物证 + 双闸开才合并。"""
         from app.repositories.settings import SettingsRepository
 
         a, b = self._embedded_pair(db_session)

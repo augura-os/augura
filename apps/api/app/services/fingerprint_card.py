@@ -24,6 +24,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -174,6 +176,37 @@ def build_card(
     return parse_card(raw)
 
 
+class SharedCardCache(dict[str, FingerprintCard | None]):
+    """生产判定专用：批次内缓存之外，再读进程级有效卡片缓存。"""
+
+
+_SHARED_CARDS: OrderedDict[
+    tuple[str, str, float, str, str, int, str], FingerprintCard
+] = OrderedDict()
+_SHARED_CARD_LOCK = threading.Lock()
+_SHARED_CARD_HITS = 0
+_SHARED_CARD_MISSES = 0
+_SHARED_CARD_LIMIT = 2048
+
+
+def clear_shared_card_cache() -> None:
+    global _SHARED_CARD_HITS, _SHARED_CARD_MISSES
+    with _SHARED_CARD_LOCK:
+        _SHARED_CARDS.clear()
+        _SHARED_CARD_HITS = 0
+        _SHARED_CARD_MISSES = 0
+
+
+def shared_card_cache_stats() -> dict[str, int]:
+    with _SHARED_CARD_LOCK:
+        return {
+            "hits": _SHARED_CARD_HITS,
+            "misses": _SHARED_CARD_MISSES,
+            "size": len(_SHARED_CARDS),
+            "limit": _SHARED_CARD_LIMIT,
+        }
+
+
 def get_card(
     config: AIConfig,
     evidence_text: str,
@@ -181,13 +214,50 @@ def get_card(
     *,
     max_tokens: int = 1200,
 ) -> FingerprintCard | None:
-    """带缓存的打卡；cache 键为证据哈希。None 也缓存（避免重复烧限流）。"""
+    """按证据哈希缓存卡片；生产共享缓存只保存成功解析的卡片。
+
+    普通 dict / None 保持原有独立缓存语义，供测试与离线回测使用。
+    共享缓存按接口、模型、温度、Prompt 版本隔离，不写 API Key 或数据库。
+    """
+    global _SHARED_CARD_HITS, _SHARED_CARD_MISSES
     if cache is None:
         return build_card(config, evidence_text, max_tokens=max_tokens)
     key = cache_key(evidence_text)
-    if key not in cache:
+    if key in cache:
+        return cache[key]
+    if not isinstance(cache, SharedCardCache):
         cache[key] = build_card(config, evidence_text, max_tokens=max_tokens)
-    return cache[key]
+        return cache[key]
+
+    shared_key = (
+        config.base_url,
+        config.vision_model,
+        config.judge_temperature,
+        CARD_VERSION,
+        ip_pack.MERGE_JUDGE_PROMPT_VERSION,
+        max_tokens,
+        key,
+    )
+    with _SHARED_CARD_LOCK:
+        card = _SHARED_CARDS.get(shared_key)
+        if card is not None:
+            _SHARED_CARDS.move_to_end(shared_key)
+            _SHARED_CARD_HITS += 1
+        else:
+            _SHARED_CARD_MISSES += 1
+    if card is None:
+        built = build_card(config, evidence_text, max_tokens=max_tokens)
+        with _SHARED_CARD_LOCK:
+            card = _SHARED_CARDS.get(shared_key)
+            if card is None and built is not None:
+                card = built
+                _SHARED_CARDS[shared_key] = card
+                if len(_SHARED_CARDS) > _SHARED_CARD_LIMIT:
+                    _SHARED_CARDS.popitem(last=False)
+            if card is not None:
+                _SHARED_CARDS.move_to_end(shared_key)
+    cache[key] = card
+    return card
 
 
 def match_cards(a: FingerprintCard, b: FingerprintCard) -> str | None:

@@ -5,8 +5,8 @@
 
 - 归族：dna_id IS NULL 的 creative 走 dna_classifier（规则→LLM N=3），
   3/3 一致自动归族（edit_logs 标 auto:），2/3 写建议缓存
-- 合并：review.merge_candidate_items 的候选对走 merge_judge（3 票防偏），
-  不满足自动门禁的一律只写建议缓存供收件箱一键确认；LLM 3/3 判同一 +
+- 合并：review.merge_candidate_items 的候选对走 merge_judge（双卡 + 规则匹配），
+  不满足自动门禁的一律只写建议缓存供收件箱一键确认；判为同一变体家族 +
   视频物证（pHash 帧对齐率 ≥ 0.90，或 tier-2 确定性裂变因子
   intro-sticker / brand-endcard）+ 无既定裁决 + merge_auto_enabled
   开启（默认开）→ 自动执行合并（edit_logs 标 auto:）
@@ -33,6 +33,7 @@ from app.repositories.settings import SettingsRepository
 from app.services import merge_ops
 from app.services import review as review_service
 from app.services.dna_classifier import suggest_dna
+from app.services.fingerprint_card import SharedCardCache
 from app.services.judge_calibration import judge_auto_allowed
 from app.services.judge_suggestions import delete_suggestion, upsert_suggestion
 from app.services.merge_guard import find_db_ruling, find_prior_ruling
@@ -156,7 +157,7 @@ def run_merge_judgements(
         and (SettingsRepository(db).get("merge_auto_enabled") or "true") != "false"  # 默认开
     )
     candidates = review_service.merge_candidate_items(db)
-    card_cache: dict = {}  # v4：指纹卡按证据哈希缓存，本批次内共享
+    card_cache: dict = SharedCardCache()  # 批次内 + 跨任务有效卡片缓存
     for item in candidates:
         try:
             if not item.creative_id or not item.related_creative_id:
@@ -196,13 +197,14 @@ def run_merge_judgements(
                 continue
             verdict = "merge" if judgement.same_creative else "split"
 
-            # 自动执行：LLM 3/3 判同一 + 视频物证（对齐率 ≥ 0.90，或
+            # 自动执行：v4 双卡完整 + 规则判同 + 视频物证（对齐率 ≥ 0.90，或
             # tier-2 确定性裂变因子——measure_pair_evidence 内部经
             # tier2_factor 三重过滤：intro-sticker/brand-endcard 白名单 +
             # 中段发散 ≤ TIER2_MAX_DIVERGENT_SEGMENTS 段）+ 开关开 +
             # 无既定裁决（上面已查）+ merge_guard
-            # 无 block，全部满足才合并；任一不满足维持只写建议
-            if merge_auto and judgement.same_creative and judgement.votes == 3:
+            # 无 block，全部满足才合并；任一不满足维持只写建议。
+            # votes 是旧三视角的展示字段，不是 v4 的执行门槛。
+            if merge_auto and judgement.same_creative:
                 evidence = measure_pair_evidence(
                     db, settings, item.creative_id, item.related_creative_id
                 )

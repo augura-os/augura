@@ -4,7 +4,7 @@ Replaces FastAPI BackgroundTasks for post-upload analysis: the API only
 INSERTs ``analysis_jobs`` rows; this process claims them with
 ``SELECT ... FOR UPDATE SKIP LOCKED``, runs the pipeline on a bounded
 thread pool (``settings.analysis_concurrency``), renews a DB lease while
-working, and classifies failures into auth (waiting_user, no retry) /
+working, and classifies failures into auth/quota (waiting_user, no retry) /
 retryable (backoff requeue, then dead) / fatal.
 
 Startup recovery re-queues running jobs with expired leases, aligns
@@ -51,8 +51,18 @@ BACKOFF_SCHEDULE = (5.0, 30.0, 300.0)
 MAX_ERROR_MESSAGE = 2000
 
 
+def _is_quota_exhausted(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in ("exceeded_current_quota_error", "insufficient_quota")
+    )
+
+
 def classify_error(exc: BaseException) -> str:
-    """失败分类："auth"（waiting_user，不重试）| "retryable"（退避重试）| "fatal"."""
+    """失败分类：auth / quota（等待用户）| retryable（退避重试）| fatal."""
+    if _is_quota_exhausted(exc):
+        return "quota"
     if isinstance(exc, (MissingAIKeyError, openai.AuthenticationError)):
         return "auth"
     if isinstance(exc, openai.APIStatusError):
@@ -205,6 +215,13 @@ def _execute_job(job_id: str) -> None:
                 job.error_message = (
                     f"AI 接口鉴权失败：{message}"
                     "（请到 Settings 检查 API Key / Base URL 后重试）"
+                )
+            elif kind == "quota":
+                job.status = "waiting_user"
+                job.error_code = "quota"
+                job.error_message = (
+                    f"AI 接口使用额度已用尽：{message}"
+                    "（请等待额度重置或调整额度后重试）"
                 )
             elif kind == "retryable":
                 job.attempt += 1

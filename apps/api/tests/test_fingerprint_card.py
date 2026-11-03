@@ -5,15 +5,20 @@ parse_card 校验 LLM 返回（不合法 → None 灰区）；match_cards 是纯
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from typing import Any
 
-from app.services import ip_pack
+from app.services import fingerprint_card, ip_pack
 from app.services.fingerprint_card import (
     FingerprintCard,
+    SharedCardCache,
     cache_key,
+    get_card,
     match_cards,
     parse_card,
 )
+from app.services.settings import AIConfig
 
 
 def _raw(**overrides: Any) -> dict[str, Any]:
@@ -160,6 +165,84 @@ class TestCacheKey:
     def test_stable_and_distinct(self) -> None:
         assert cache_key("同一份证据") == cache_key("同一份证据")
         assert cache_key("证据 a") != cache_key("证据 b")
+
+
+class TestSharedCardCache:
+    @staticmethod
+    def _config(
+        model: str = "model-a", temperature: float = 1.0
+    ) -> AIConfig:
+        return AIConfig(
+            api_key="",
+            base_url="https://fake.invalid",
+            vision_model=model,
+            embedding_model="",
+            judge_temperature=temperature,
+        )
+
+    def test_valid_card_shared_across_batches(self, monkeypatch) -> None:
+        calls: list[str] = []
+        monkeypatch.setattr(
+            fingerprint_card, "build_card",
+            lambda _config, evidence, **_kwargs: calls.append(evidence) or _card(),
+        )
+        config = self._config()
+        first = get_card(config, "证据甲", SharedCardCache())
+        second = get_card(config, "证据甲", SharedCardCache())
+        assert first is second
+        assert calls == ["证据甲"]
+        assert fingerprint_card.shared_card_cache_stats() == {
+            "hits": 1, "misses": 1, "size": 1, "limit": 2048,
+        }
+
+    def test_failure_not_shared_with_next_batch(self, monkeypatch) -> None:
+        responses = iter([None, _card()])
+        calls: list[str] = []
+
+        def _build(_config, evidence: str, **_kwargs):
+            calls.append(evidence)
+            return next(responses)
+
+        monkeypatch.setattr(fingerprint_card, "build_card", _build)
+        config = self._config()
+        assert get_card(config, "证据乙", SharedCardCache()) is None
+        assert get_card(config, "证据乙", SharedCardCache()) is not None
+        assert calls == ["证据乙", "证据乙"]
+
+    def test_slow_card_does_not_block_other_cache_keys(self, monkeypatch) -> None:
+        started, release = Event(), Event()
+
+        def _build(_config, evidence: str, **_kwargs):
+            if evidence == "慢证据":
+                started.set()
+                assert release.wait(2)
+            return _card()
+
+        monkeypatch.setattr(fingerprint_card, "build_card", _build)
+        config = self._config()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            slow = pool.submit(get_card, config, "慢证据", SharedCardCache())
+            assert started.wait(1)
+            fast = pool.submit(get_card, config, "快证据", SharedCardCache())
+            try:
+                assert fast.result(timeout=0.5) is not None
+            finally:
+                release.set()
+            assert slow.result(timeout=1) is not None
+
+    def test_model_temperature_and_prompt_have_own_cache(self, monkeypatch) -> None:
+        calls: list[str] = []
+        monkeypatch.setattr(
+            fingerprint_card, "build_card",
+            lambda _config, evidence, **_kwargs: calls.append(evidence) or _card(),
+        )
+        base = self._config()
+        get_card(base, "证据丙", SharedCardCache())
+        get_card(self._config(model="model-b"), "证据丙", SharedCardCache())
+        get_card(self._config(temperature=0.7), "证据丙", SharedCardCache())
+        monkeypatch.setattr(fingerprint_card, "CARD_VERSION", "new-prompt")
+        get_card(base, "证据丙", SharedCardCache())
+        assert calls == ["证据丙"] * 4
 
 
 class TestMatchCards:

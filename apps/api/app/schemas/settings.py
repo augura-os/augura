@@ -22,7 +22,7 @@ class SettingsInfo(BaseModel):
     judge_temperature: float = 0.7
     telemetry_enabled: bool
     telemetry_instance_id: str
-    # 合并自动执行开关（默认开；开启后 LLM 3/3 + pHash 对齐 ≥0.90 的合并
+    # 合并自动执行开关（默认开；开启后指纹卡规则判同 + 视频物证通过的
     # 候选对不再只写建议，由 judge_pipeline 直接执行并标 auto:）
     merge_auto_enabled: bool = True
     # 观察对自动结案默认关闭；须由独立判例认证后显式开启

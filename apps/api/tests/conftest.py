@@ -102,6 +102,15 @@ def _clear_similar_pairs_cache() -> Iterator[None]:
     graph_sync.invalidate_similar_pairs_cache()
 
 
+@pytest.fixture(autouse=True)
+def _clear_shared_card_cache() -> Iterator[None]:
+    from app.services import fingerprint_card
+
+    fingerprint_card.clear_shared_card_cache()
+    yield
+    fingerprint_card.clear_shared_card_cache()
+
+
 @pytest.fixture()
 def db_session(test_db_url: str) -> Iterator[Session]:
     engine = create_engine(test_db_url)

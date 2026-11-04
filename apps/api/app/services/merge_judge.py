@@ -21,8 +21,8 @@ v4 → v4.1（2026-10-26，B2 回测修复）：
   15s（den-creative-framework A-Segment 规则；hook 功能边界而非秒数）。
 
 机制要点：
-- votes 固定记 2——v4.x 不开放自动合并闸门（judge_pipeline 要求
-  votes==3），待 B2 回测验证后再议；
+- votes 固定记 2，仅保留旧三视角的展示口径；v4 是否判同由双卡完整 +
+  代码规则匹配决定，自动合并另需视频物证，不再使用旧 votes==3 门槛；
 - LLM 限流/解析失败、skeleton_new（库外新结构）、复核推翻 → 返回
   None（灰区人工）。
 """
@@ -117,7 +117,7 @@ def evidence_from_analysis(analysis: dict[str, Any]) -> PairEvidence:
 @dataclass
 class MergeJudgement:
     relation: str  # RELATIONS 之一
-    votes: int  # v4.x 固定 2（不开放自动合并闸门，见模块 docstring）
+    votes: int  # v4.x 固定 2，仅作展示；判同看 same_creative
     reason: str  # 人读摘要
     core: dict[str, str] = field(default_factory=dict)  # v4 弃用，留兼容
     variant: dict[str, str] = field(default_factory=dict)  # v4 弃用，留兼容

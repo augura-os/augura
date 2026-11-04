@@ -12,11 +12,12 @@
 4. 向量近邻：representative_embedding 余弦 top-k（k=EMBEDDING_RECALL_TOP_K）
    ——shadow-only：只进候选并集让 LLM 判定，永不接管 attach（E2）
 
-排除：已有裁决（split_rulings / case-rulings）、观察对、同族（同 DNA）、
-已归档 creative。判定沿用 merge_judge 3 票防偏；双证据齐（LLM 3/3 +
-视频物证：pHash 对齐 ≥0.90 或 classify 确定性裂变因子 intro-sticker /
-brand-endcard）且 merge_auto_enabled + judge_auto_allowed(merge_pair)
-开才自动合并（merge_ops），否则写收件箱建议（reason 带三路证据）。
+排除：已有裁决（split_rulings / case-rulings）、观察对、已归档 creative；
+同 DNA 不排除（DNA 是玩法模式，不是 Creative 身份）。判定沿用
+merge_judge 双卡 + 规则匹配；双证据齐（same_variant_family + 视频物证：
+pHash 对齐 ≥0.90 或 classify 确定性裂变因子 intro-sticker / brand-endcard）
+且 merge_auto_enabled + judge_auto_allowed(merge_pair) 开才自动合并
+（merge_ops），否则写收件箱建议（reason 带召回证据）。
 
 幂等：upsert 唯一约束 + 已合并的creative不再成对。挂载点：上传管线
 run_post_analysis（新 creative vs 全部，O(N)）、merge_ops 合并成功后
@@ -26,8 +27,6 @@ run_post_analysis（新 creative vs 全部，O(N)）、merge_ops 合并成功后
 from __future__ import annotations
 
 import logging
-import shutil
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -42,6 +41,7 @@ from app.services import markets, merge_ops
 from app.services import review as review_service
 from app.services.clustering import cosine_matrix
 from app.services.embedding import EMBEDDING_RECALL_TOP_K
+from app.services.fingerprint_card import SharedCardCache
 from app.services.judge_calibration import judge_auto_allowed
 from app.services.judge_suggestions import delete_suggestion, upsert_suggestion
 from app.services.merge_guard import find_prior_ruling
@@ -49,12 +49,11 @@ from app.services.merge_judge import PairEvidence, evidence_from_analysis, judge
 from app.services.merge_measure import (
     AUTO_MERGE_DERIVATION_FACTORS,
     MIN_ALIGNED_FRACTION_FOR_AUTO,
+    cached_video_signature,
     first_video_asset,
     measure_pair_evidence,
 )
 from app.services.settings import AIConfig, resolve_ai_config
-from app.services.storage import StorageService
-from app.services.variant_diff import frame_phash_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -154,26 +153,32 @@ def _visual_signatures(
 ) -> dict[str, list[int]]:
     """每个 creative 代表视频的帧 pHash 序列；无视频/失败的不进字典。
 
-    每次扫描现算（不建缓存表）：百级 creative 分钟级跑完，量级到万再缓存。
+    进程内 LRU 缓存不写库，与自动测量共用下载和抽帧结果；失败不缓存。
     """
-    storage = StorageService(settings)
+    del settings  # 缓存键只含不可变素材键；存储配置由进程统一设置提供
+    before = cached_video_signature.cache_info()
     signatures: dict[str, list[int]] = {}
-    tmp_dir = Path(tempfile.mkdtemp(prefix="missed-merge-"))
-    try:
-        for creative_id in creative_ids:
-            asset = first_video_asset(db, creative_id)
-            if asset is None:
-                continue
-            storage_key, filename = asset
-            local = str(tmp_dir / f"{creative_id}{Path(filename).suffix.lower()}")
-            try:
-                storage.download_to(storage_key, local)
-                signatures[creative_id] = frame_phash_sequence(local)
-            except Exception as exc:  # noqa: BLE001 — 单族失败不影响整轮扫描
-                logger.warning("视觉签名失败 creative=%s: %s", creative_id, exc)
-                emit(f"!! 视觉签名失败：{creative_id[:8]} {exc}")
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    for creative_id in creative_ids:
+        asset = first_video_asset(db, creative_id)
+        if asset is None:
+            continue
+        storage_key, filename = asset
+        try:
+            signature, _meta = cached_video_signature(
+                storage_key, Path(filename).suffix.lower()
+            )
+            signatures[creative_id] = list(signature)
+        except Exception as exc:  # noqa: BLE001 — 单族失败不影响整轮扫描
+            logger.warning("视觉签名失败 creative=%s: %s", creative_id, exc)
+            emit(f"!! 视觉签名失败：{creative_id[:8]} {exc}")
+    after = cached_video_signature.cache_info()
+    logger.info(
+        "视觉签名：本轮缓存命中 %d，新计算 %d（缓存 %d/%d）",
+        after.hits - before.hits,
+        after.misses - before.misses,
+        after.currsize,
+        after.maxsize,
+    )
     return signatures
 
 
@@ -196,7 +201,10 @@ def visual_overlap(source: list[int], target: list[int]) -> float:
 
 
 def _excluded_pairs(db: Session, creatives: Sequence[Creative]) -> set[frozenset]:
-    """裁决（split_rulings 表）+ 观察对 + 同族 → 永不召回的 creative id 对。"""
+    """裁决（split_rulings 表）+ 观察对 → 永不召回的 creative id 对。
+
+    DNA 是玩法模式层，不是 Creative 身份；同 DNA 不排除变体合并。
+    """
     id_by_name = {c.name: c.id for c in creatives}
     excluded: set[frozenset] = set()
     for ruling in db.scalars(select(SplitRuling)).all():
@@ -204,14 +212,6 @@ def _excluded_pairs(db: Session, creatives: Sequence[Creative]) -> set[frozenset
         if left and right:
             excluded.add(frozenset((left, right)))
     excluded |= review_service._observation_pair_refs()
-    dna_ids = {c.id: c.dna_id for c in creatives if c.dna_id}
-    by_dna: dict[str, list[str]] = {}
-    for creative_id, dna_id in dna_ids.items():
-        by_dna.setdefault(dna_id, []).append(creative_id)
-    for members in by_dna.values():
-        for i, left in enumerate(members):
-            for right in members[i + 1 :]:
-                excluded.add(frozenset((left, right)))
     return excluded
 
 
@@ -225,7 +225,7 @@ def _embedding_topk_recall(
 
     不用全局阈值（E0 实测：bge 分布压缩在 [0.6,1.0]，阈值跨模型不可移植，
     能排序就别用阈值）。只认 ``pairs`` 里的候选（scoped 模式只扫 anchor 相关
-    对）且尊重与其他通道一致的排除（已裁决/观察对/同族/case-rulings）。
+    对）且尊重与其他通道一致的排除（已裁决/观察对/case-rulings）。
     """
     embedded = [c for c in creatives if c.representative_embedding]
     if len(embedded) < 2:
@@ -260,7 +260,7 @@ def recall_pairs(
     emit: Callable[[str], None] = lambda _msg: None,
 ) -> list[RecallPair]:
     """四路召回并集。``creative_id`` 给了就只扫它 vs 全部（O(N)，上传/
-    合并后的局部重扫）；不给则全量两两。排除已裁决/观察对/同族/已归档。
+    合并后的局部重扫）；不给则全量两两。排除已裁决/观察对/已归档。
     """
     stmt = (
         select(Creative)
@@ -404,7 +404,7 @@ def scan_missed_merges(
     )
 
     analysis_evidence = _analysis_evidence(db)
-    card_cache: dict = {}  # v4：指纹卡按证据哈希缓存，本批次内共享
+    card_cache: dict = SharedCardCache()  # 批次内 + 跨任务有效卡片缓存
     alive = set(db.scalars(select(Creative.id)).all())
     for pair in pairs:
         # 前面的自动合并可能已经吃掉其中一方（传递闭包链式合并）——跳过
@@ -449,7 +449,9 @@ def scan_missed_merges(
         stats.judged_merge += 1
         alignment: float | None = None
         factor: str | None = None
-        if judgement.votes == 3:
+        # v4 的 same_creative 已要求双卡完整且代码规则判同；
+        # votes 是旧三视角的展示字段，不能再作为自动执行门槛。
+        if auto_merge:
             evidence_pair = measure_pair_evidence(
                 db, settings, pair.left.id, pair.right.id
             )
@@ -466,7 +468,7 @@ def scan_missed_merges(
             evidence_channel = (
                 f"裂变因子 {factor}（对齐 {alignment:.0%}）"
             )
-        if auto_merge and judgement.votes == 3 and evidence_channel is not None:
+        if auto_merge and evidence_channel is not None:
             try:
                 merge_ops.merge_creatives(
                     db, settings, pair.right.id, pair.left.id,

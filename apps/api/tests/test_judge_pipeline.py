@@ -152,7 +152,7 @@ class TestScopedMergeJudgements:
 
 
 class TestAutoMergeExecute:
-    """合并自动执行的决策矩阵：LLM 3/3 + 视频物证（pHash 对齐 ≥0.90 或
+    """合并自动执行的决策矩阵：v4 指纹卡规则判同 + 视频物证（pHash 对齐 ≥0.90 或
     tier-2 裂变因子）+ 开关开 → 自动合并（edit_logs 标 auto:、无建议
     残留）；任一不满足只写建议。
 
@@ -178,7 +178,8 @@ class TestAutoMergeExecute:
         db: Session,
         monkeypatch,  # noqa: ANN001
         *,
-        votes: int = 3,
+        votes: int = 2,
+        relation: str = "same_variant_family",
         alignment: float | None = 0.95,
         factor: str | None = None,
         merge_auto: str | None = "true",
@@ -187,7 +188,7 @@ class TestAutoMergeExecute:
         monkeypatch.setattr(
             judge_pipeline, "judge_pair",
             lambda config, *, evidence_a, evidence_b, card_cache=None: MergeJudgement(
-                relation="same_variant_family", votes=votes, reason="同一创意换皮",
+                relation=relation, votes=votes, reason="指纹卡判定",
             ),
         )
         monkeypatch.setattr(
@@ -284,12 +285,16 @@ class TestAutoMergeExecute:
         assert db_session.get(Creative, second.id) is not None
         assert len(self._merge_pair_suggestions(db_session)) == 1
 
-    def test_split_vote_only_suggests(self, db_session: Session, monkeypatch) -> None:
-        first, second = self._harness(db_session, monkeypatch, votes=2)
+    def test_split_relation_only_suggests(self, db_session: Session, monkeypatch) -> None:
+        first, second = self._harness(
+            db_session, monkeypatch, relation="different_concept"
+        )
         self._run(db_session)
         assert db_session.get(Creative, first.id) is not None
         assert db_session.get(Creative, second.id) is not None
-        assert len(self._merge_pair_suggestions(db_session)) == 1
+        suggestions = self._merge_pair_suggestions(db_session)
+        assert len(suggestions) == 1
+        assert suggestions[0].verdict == "split"
 
     def test_switch_off_only_suggests(self, db_session: Session, monkeypatch) -> None:
         first, second = self._harness(db_session, monkeypatch, merge_auto="false")

@@ -173,7 +173,7 @@ class TestMergeJudge:
         assert judgement is not None
         assert judgement.relation == "same_variant_family"
         assert judgement.same_creative is True
-        assert judgement.votes == 2  # v4 固定 2，不开放自动合并闸门
+        assert judgement.votes == 2  # v4 双卡判同；自动合并另需视频物证
         assert "slg-zero-to-prosperity" in judgement.reason
         params = judgement.reason_params()
         assert params["prompt_version"] == ip_pack.MERGE_JUDGE_PROMPT_VERSION

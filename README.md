@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/augura-os/augura/main/scripts/insta
 
 On macOS you can also download the repo and double-click `install.command`. On **Windows**, double-click `install.bat` from a checkout. All of them are idempotent — re-running updates and restarts.
 
-Then open **http://localhost:3000**.
+Then open **[http://localhost:3000](http://localhost:3000)**.
 
 <details>
 <summary>Manual Docker setup, local service URLs and network troubleshooting</summary>

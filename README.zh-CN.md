@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/augura-os/augura/main/scripts/insta
 
 macOS 也可以下载仓库后双击 `install.command`；**Windows** 在仓库目录中双击 `install.bat`。三者都幂等——重复运行即更新重启。
 
-安装完成后打开 **http://localhost:3000**。
+安装完成后打开 **[http://localhost:3000](http://localhost:3000)**。
 
 <details>
 <summary>手动 Docker 安装、本地服务地址与网络故障处理</summary>
